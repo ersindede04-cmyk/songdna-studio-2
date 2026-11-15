@@ -1,14 +1,14 @@
 
-name: SONGDNA Studio 2.0.0 - Clean Android Build
+name: SONGDNA Studio 3.0.0 - Gemini Android Build
 
-'on':
+on:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-studio-2-build
+  group: songdna-studio-3-build
   cancel-in-progress: false
 
 jobs:
@@ -21,15 +21,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract source ZIP
+      - name: Find and extract SONGDNA 3.0 source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -iname '*.zip' -print -quit)"
+          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -iname 'SONGDNA_Studio_3_0_0*.zip' -print -quit)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "::error::SONGDNA source ZIP not found."
+            echo "::error::SONGDNA Studio 3.0.0 source ZIP not found."
             exit 1
           fi
 
@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager --licenses < <(yes)
+          yes | sdkmanager --licenses
 
       - name: Install Android SDK components
         shell: bash
@@ -88,7 +88,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           cd "$PROJECT_ROOT"
 
           test -f scripts/verify-source.py
@@ -98,7 +97,6 @@ jobs:
           test -f android-wrapper/app/src/main/AndroidManifest.xml
           test -f android-wrapper/app/src/main/java/com/songdna/studio/MainActivity.kt
           test -f android-wrapper/app/src/main/assets/www/index.html
-          test -f .github/workflows/build-apk.yml
           test -f www/index.html
           test -f backend/server.js
 
@@ -108,7 +106,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           gradle \
             --no-daemon \
             --stacktrace \
@@ -134,8 +131,8 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-Studio-2.0.0-debug-APK
-          path: extracted/**/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          name: SONGDNA-Studio-3.0.0-Gemini-debug-APK
+          path: ${{ env.PROJECT_ROOT }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
           
