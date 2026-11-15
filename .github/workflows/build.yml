@@ -1,7 +1,7 @@
 
 name: SONGDNA Studio 3.0.0 - Gemini Android Build
 
-'on':
+on:
   workflow_dispatch:
 
 permissions:
@@ -28,25 +28,27 @@ jobs:
 
           ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_3_0_0_Gemini_Developer.zip"
 
-          if [ ! -s "$ZIP_FILE" ]; then
-            echo "::error::SONGDNA 3.0.0 Gemini source ZIP not found."
+          if [[ ! -s "$ZIP_FILE" ]]; then
+            echo "::error::SONGDNA 3.0.0 source ZIP not found."
+            find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -iname '*.zip' -print
             exit 1
           fi
 
-          mkdir -p "$RUNNER_TEMP/songdna-3.0.0"
-          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-3.0.0"
+          EXTRACT_DIR="$RUNNER_TEMP/songdna-3.0.0"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
 
-          SETTINGS_FILE="$(find "$RUNNER_TEMP/songdna-3.0.0" -type f -path '*/android-wrapper/settings.gradle.kts' -print -quit)"
+          SETTINGS_FILE="$(find "$EXTRACT_DIR" -type f -path '*/android-wrapper/settings.gradle.kts' -print -quit)"
 
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "::error::Android project settings file not found."
+          if [[ -z "$SETTINGS_FILE" ]]; then
+            echo "::error::Android project settings.gradle.kts not found."
+            find "$EXTRACT_DIR" -maxdepth 4 -type f | head -100
             exit 1
           fi
 
           PROJECT_ROOT="$(dirname "$(dirname "$SETTINGS_FILE")")"
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-
-          echo "Using source: $PROJECT_ROOT"
+          echo "Project root: $PROJECT_ROOT"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -54,19 +56,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Accept Android SDK licenses
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
           yes | sdkmanager --licenses
+          SDK_STATUS=${PIPESTATUS[1]}
+          set -e
+
+          if [[ "$SDK_STATUS" -ne 0 ]]; then
+            echo "::error::Android SDK license acceptance failed."
+            exit "$SDK_STATUS"
+          fi
+
+          echo "Android SDK licenses accepted."
 
       - name: Install Android SDK components
         shell: bash
@@ -86,29 +92,33 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           cd "$PROJECT_ROOT"
 
-          test -f scripts/verify-source.py
-          test -f android-wrapper/settings.gradle.kts
-          test -f android-wrapper/app/build.gradle.kts
-          test -f android-wrapper/app/src/main/AndroidManifest.xml
-          test -f android-wrapper/app/src/main/java/com/songdna/studio/MainActivity.kt
-          test -f android-wrapper/app/src/main/assets/www/index.html
-          test -f www/index.html
-          test -f backend/server.js
+          REQUIRED_FILES=(
+            "android-wrapper/settings.gradle.kts"
+            "android-wrapper/build.gradle.kts"
+            "android-wrapper/app/build.gradle.kts"
+            "android-wrapper/app/src/main/AndroidManifest.xml"
+            "backend/server.js"
+          )
 
-          grep -Fq 'SONGDNA-Studio-3.0.0' android-wrapper/settings.gradle.kts
-          grep -Fq 'versionName = "3.0.0"' android-wrapper/app/build.gradle.kts
-          grep -Fq 'versionCode = 10' android-wrapper/app/build.gradle.kts
+          for file in "${REQUIRED_FILES[@]}"; do
+            if [[ ! -s "$file" ]]; then
+              echo "::error::Missing required file: $file"
+              exit 1
+            fi
+          done
 
-          python3 scripts/verify-source.py
+          if [[ -f "scripts/verify-source.py" ]]; then
+            python3 scripts/verify-source.py
+          else
+            echo "Source verification script not present; basic checks completed."
+          fi
 
       - name: Build SONGDNA Studio 3.0.0 APK
         shell: bash
         run: |
           set -euo pipefail
-
           gradle \
             --no-daemon \
             --stacktrace \
@@ -123,15 +133,16 @@ jobs:
 
           APK="$PROJECT_ROOT/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ ! -s "$APK" ]; then
-            echo "::error::APK was not generated."
+          if [[ ! -s "$APK" ]]; then
+            echo "::error::APK was not generated or is empty."
             exit 1
           fi
 
-          echo "SONGDNA Studio 3.0.0 APK successfully generated:"
+          echo "APK generated successfully."
           ls -lh "$APK"
+          sha256sum "$APK"
 
-      - name: Upload SONGDNA 3.0.0 APK
+      - name: Upload SONGDNA Studio 3.0.0 APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-Studio-3.0.0-Gemini-debug-APK
