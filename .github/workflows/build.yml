@@ -1,19 +1,19 @@
 
 name: SONGDNA Studio 3.0.0 - Gemini Android Build
 
-on:
+'on':
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-studio-3-build
+  group: songdna-studio-3-gemini-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Extract, validate and build APK
+    name: Extract, validate and build 3.0.0 APK
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -21,34 +21,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract SONGDNA 3.0 source ZIP
+      - name: Find and extract exact 3.0.0 source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -iname 'SONGDNA_Studio_3_0_0*.zip' -print -quit)"
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_3_0_0_Gemini_Developer.zip"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::SONGDNA Studio 3.0.0 source ZIP not found."
+          if [ ! -s "$ZIP_FILE" ]; then
+            echo "::error::SONGDNA 3.0.0 Gemini source ZIP not found."
             exit 1
           fi
 
-          echo "Source ZIP: $ZIP_FILE"
+          mkdir -p "$RUNNER_TEMP/songdna-3.0.0"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-3.0.0"
 
-          mkdir -p "$GITHUB_WORKSPACE/extracted"
-          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/extracted"
-
-          SETTINGS_FILE="$(find "$GITHUB_WORKSPACE/extracted" -type f -path '*/android-wrapper/settings.gradle.kts' -print -quit)"
+          SETTINGS_FILE="$(find "$RUNNER_TEMP/songdna-3.0.0" -type f -path '*/android-wrapper/settings.gradle.kts' -print -quit)"
 
           if [ -z "$SETTINGS_FILE" ]; then
-            echo "::error::Android settings.gradle.kts not found."
+            echo "::error::Android project settings file not found."
             exit 1
           fi
 
           PROJECT_ROOT="$(dirname "$(dirname "$SETTINGS_FILE")")"
-
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-          echo "Detected project: $PROJECT_ROOT"
+
+          echo "Using source: $PROJECT_ROOT"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -84,15 +82,15 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate extracted source
+      - name: Validate SONGDNA 3.0.0 source
         shell: bash
         run: |
           set -euo pipefail
+
           cd "$PROJECT_ROOT"
 
           test -f scripts/verify-source.py
           test -f android-wrapper/settings.gradle.kts
-          test -f android-wrapper/build.gradle.kts
           test -f android-wrapper/app/build.gradle.kts
           test -f android-wrapper/app/src/main/AndroidManifest.xml
           test -f android-wrapper/app/src/main/java/com/songdna/studio/MainActivity.kt
@@ -100,12 +98,17 @@ jobs:
           test -f www/index.html
           test -f backend/server.js
 
+          grep -Fq 'SONGDNA-Studio-3.0.0' android-wrapper/settings.gradle.kts
+          grep -Fq 'versionName = "3.0.0"' android-wrapper/app/build.gradle.kts
+          grep -Fq 'versionCode = 10' android-wrapper/app/build.gradle.kts
+
           python3 scripts/verify-source.py
 
-      - name: Build Android debug APK
+      - name: Build SONGDNA Studio 3.0.0 APK
         shell: bash
         run: |
           set -euo pipefail
+
           gradle \
             --no-daemon \
             --stacktrace \
@@ -121,14 +124,14 @@ jobs:
           APK="$PROJECT_ROOT/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -s "$APK" ]; then
-            echo "::error::APK file was not generated."
+            echo "::error::APK was not generated."
             exit 1
           fi
 
-          echo "APK successfully generated:"
+          echo "SONGDNA Studio 3.0.0 APK successfully generated:"
           ls -lh "$APK"
 
-      - name: Upload APK
+      - name: Upload SONGDNA 3.0.0 APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-Studio-3.0.0-Gemini-debug-APK
