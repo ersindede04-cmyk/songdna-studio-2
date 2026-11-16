@@ -1,3 +1,4 @@
+
 name: SONGDNA Studio 4.1.2 - Android APK
 
 on:
@@ -28,7 +29,7 @@ jobs:
           ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_4_1_2_Complete_Integrated.zip"
 
           if [[ ! -s "$ZIP_FILE" ]]; then
-            echo "::error::4.1.2 source ZIP not found."
+            echo "::error::4.1.2 source ZIP was not found."
             exit 1
           fi
 
@@ -39,7 +40,7 @@ jobs:
           PROJECT_DIR="$EXTRACT_DIR/SONGDNA-Studio-4.1.0"
 
           if [[ ! -d "$PROJECT_DIR" ]]; then
-            echo "::error::Project directory not found."
+            echo "::error::Project directory was not found."
             exit 1
           fi
 
@@ -61,24 +62,15 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          set +e
-          yes | sdkmanager --licenses
-          STATUS=${PIPESTATUS[1]}
-          set -e
-          exit "$STATUS"
-
-      - name: Install Android SDK components
-        run: |
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+      - name: Set up Android SDK and accept licenses
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: |
+            platform-tools
+            platforms;android-35
+            build-tools;35.0.0
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -109,3 +101,4 @@ jobs:
           path: ${{ env.PROJECT_DIR }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+          
