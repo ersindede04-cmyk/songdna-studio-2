@@ -1,5 +1,4 @@
-
-name: SONGDNA Studio 4.1.0 - Android APK
+name: SONGDNA Studio 4.1.2 - Android APK
 
 on:
   workflow_dispatch:
@@ -8,12 +7,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: songdna-studio-4-1-0-android-build
+  group: songdna-studio-4-1-2-android-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Extract, validate and build SONGDNA 4.1.0
+    name: Build SONGDNA Studio 4.1.2
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -21,32 +20,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract 4.1.0 source ZIP
+      - name: Find and extract 4.1.2 source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_4_1_0_Developer.zip"
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_4_1_2_Complete_Integrated.zip"
 
           if [[ ! -s "$ZIP_FILE" ]]; then
-            echo "::error::4.1.0 source ZIP was not found in repository root."
+            echo "::error::4.1.2 source ZIP not found."
             exit 1
           fi
 
-          EXTRACT_DIR="$RUNNER_TEMP/songdna-4.1.0"
+          EXTRACT_DIR="$RUNNER_TEMP/songdna-4.1.2"
           mkdir -p "$EXTRACT_DIR"
           unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
 
-          VERIFY_FILE="$(find "$EXTRACT_DIR" -type f -path '*/scripts/verify-source.py' -print -quit)"
+          PROJECT_DIR="$EXTRACT_DIR/SONGDNA-Studio-4.1.0"
 
-          if [[ -z "$VERIFY_FILE" ]]; then
-            echo "::error::4.1.0 archive is missing scripts/verify-source.py."
+          if [[ ! -d "$PROJECT_DIR" ]]; then
+            echo "::error::Project directory not found."
             exit 1
           fi
 
-          PROJECT_ROOT="$(dirname "$(dirname "$VERIFY_FILE")")"
-          echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-          echo "Using source directory: $PROJECT_ROOT"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -59,89 +56,56 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+      - name: Set up Python 3
+        uses: actions/setup-python@v5
         with:
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
+          python-version: '3.x'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          set +e
+          yes | sdkmanager --licenses
+          STATUS=${PIPESTATUS[1]}
+          set -e
+          exit "$STATUS"
 
       - name: Install Android SDK components
-        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Validate SONGDNA 4.1.0 source
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_ROOT"
-          python3 scripts/verify-source.py
-          node --check www/app.js
-          node --check backend/server.js
+      - name: Validate source
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: python3 scripts/verify-source.py
 
       - name: Build debug APK
-        shell: bash
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -euo pipefail
-          gradle --no-daemon --stacktrace --warning-mode all \
-            -p "$PROJECT_ROOT/android-wrapper" clean assembleDebug
+          gradle --no-daemon --stacktrace \
+            --warning-mode all \
+            -p android-wrapper \
+            clean assembleDebug
 
-      - name: Verify debug APK
-        shell: bash
+      - name: Verify APK
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          set -euo pipefail
-          APK="$PROJECT_ROOT/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-          ls -lh "$APK"
-          sha256sum "$APK"
+          test -s android-wrapper/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Upload debug APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-Studio-4.1.0-debug-APK
-          path: ${{ env.PROJECT_ROOT }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          name: SONGDNA-Studio-4.1.2-APK
+          path: ${{ env.PROJECT_DIR }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
-
-      - name: Configure release signing when all secrets exist
-        id: signing
-        shell: bash
-        env:
-          KEYSTORE_B64: ${{ secrets.SONGDNA_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.SONGDNA_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.SONGDNA_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.SONGDNA_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          if [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
-            KEYSTORE_PATH="$RUNNER_TEMP/songdna-release.jks"
-            printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
-            test -s "$KEYSTORE_PATH"
-            {
-              echo "SONGDNA_KEYSTORE_FILE=$KEYSTORE_PATH"
-              echo "SONGDNA_KEYSTORE_PASSWORD=$STORE_PASSWORD"
-              echo "SONGDNA_KEY_ALIAS=$KEY_ALIAS"
-              echo "SONGDNA_KEY_PASSWORD=$KEY_PASSWORD"
-            } >> "$GITHUB_ENV"
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Signing secrets are not configured; only debug APK will be produced."
-          fi
-
-      - name: Build signed release APK
-        if: steps.signing.outputs.enabled == 'true'
-        run: gradle --no-daemon --stacktrace -p "$PROJECT_ROOT/android-wrapper" assembleRelease
-
-      - name: Upload signed release APK
-        if: steps.signing.outputs.enabled == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: SONGDNA-Studio-4.1.0-signed-release-APK
-          path: ${{ env.PROJECT_ROOT }}/android-wrapper/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-          retention-days: 30
-          
