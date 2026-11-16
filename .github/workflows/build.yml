@@ -61,25 +61,17 @@ jobs:
           node-version: '20'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          set +e
-          yes | sdkmanager --licenses
-          PIPE_STATUS=("${PIPESTATUS[@]}")
-          set -e
-
-          SDKMANAGER_STATUS="${PIPE_STATUS[1]}"
-
-          if [[ "$SDKMANAGER_STATUS" -ne 0 ]]; then
-            echo "::error::Android SDK license acceptance failed."
-            exit "$SDKMANAGER_STATUS"
-          fi
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: ''
 
       - name: Install Android SDK components
+        shell: bash
         run: |
+          set -euo pipefail
+
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -101,6 +93,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           gradle \
             --no-daemon \
             --stacktrace \
@@ -162,7 +155,10 @@ jobs:
 
       - name: Build signed release APK
         if: steps.signing.outputs.enabled == 'true'
+        shell: bash
         run: |
+          set -euo pipefail
+
           gradle \
             --no-daemon \
             --stacktrace \
@@ -177,3 +173,4 @@ jobs:
           path: ${{ env.PROJECT_ROOT }}/android-wrapper/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30
+          
