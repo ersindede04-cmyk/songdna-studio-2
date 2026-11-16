@@ -1,5 +1,5 @@
 
-name: SONGDNA Studio 3.0.0 - Gemini Android Build
+name: SONGDNA Studio 4.0.2 - Android APK
 
 on:
   workflow_dispatch:
@@ -8,12 +8,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: songdna-studio-3-gemini-build
+  group: songdna-studio-4-0-2-android-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Extract, validate and build 3.0.0 APK
+    name: Extract, validate and build SONGDNA 4.0.2
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -21,36 +21,33 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract exact 3.0.0 source ZIP
+      - name: Find and extract 4.0.2 source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_3_0_0_Gemini_Developer.zip"
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_4_0_2_Developer.zip"
 
           if [[ ! -s "$ZIP_FILE" ]]; then
-            echo "::error::Expected source ZIP not found: SONGDNA_Studio_3_0_0_Gemini_Developer.zip"
-            echo "ZIP files found in repository root:"
+            echo "::error::SONGDNA_Studio_4_0_2_Developer.zip was not found."
             find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -iname '*.zip' -printf '%f\n' || true
             exit 1
           fi
 
-          echo "Using source ZIP: $ZIP_FILE"
-          EXTRACT_DIR="$RUNNER_TEMP/songdna-3.0.0"
+          EXTRACT_DIR="$RUNNER_TEMP/songdna-4.0.2"
           mkdir -p "$EXTRACT_DIR"
           unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
 
-          SETTINGS_FILE="$(find "$EXTRACT_DIR" -type f -path '*/android-wrapper/settings.gradle.kts' -print -quit)"
-          if [[ -z "$SETTINGS_FILE" ]]; then
-            echo "::error::android-wrapper/settings.gradle.kts was not found in the source ZIP."
-            echo "Archive contents:"
-            find "$EXTRACT_DIR" -maxdepth 4 -type f | head -100
+          VERIFY_FILE="$(find "$EXTRACT_DIR" -type f -path '*/scripts/verify-source.py' -print -quit)"
+
+          if [[ -z "$VERIFY_FILE" ]]; then
+            echo "::error::4.0.2 source archive validation file is missing."
             exit 1
           fi
 
-          PROJECT_ROOT="$(dirname "$(dirname "$SETTINGS_FILE")")"
+          PROJECT_ROOT="$(dirname "$(dirname "$VERIFY_FILE")")"
           echo "PROJECT_ROOT=$PROJECT_ROOT" >> "$GITHUB_ENV"
-          echo "Detected project root: $PROJECT_ROOT"
+          echo "Using source directory: $PROJECT_ROOT"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -58,33 +55,31 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
       - name: Accept Android SDK licenses
         shell: bash
         run: |
-          set -euo pipefail
-
-          # sdkmanager may close stdin before "yes" finishes.
-          # Capture sdkmanager's status immediately; do not fail on yes/SIGPIPE.
           set +e
           yes | sdkmanager --licenses
           PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
 
           SDKMANAGER_STATUS="${PIPE_STATUS[1]}"
+
           if [[ "$SDKMANAGER_STATUS" -ne 0 ]]; then
-            echo "::error::Android SDK license acceptance failed (sdkmanager exit $SDKMANAGER_STATUS)."
+            echo "::error::Android SDK license acceptance failed."
             exit "$SDKMANAGER_STATUS"
           fi
 
-          echo "Android SDK licenses accepted."
-
       - name: Install Android SDK components
-        shell: bash
         run: |
-          set -euo pipefail
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -95,37 +90,14 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate SONGDNA 3.0.0 source
+      - name: Validate SONGDNA 4.0.2 source
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_ROOT"
+          python3 scripts/verify-source.py
 
-          REQUIRED_FILES=(
-            "android-wrapper/settings.gradle.kts"
-            "android-wrapper/build.gradle.kts"
-            "android-wrapper/app/build.gradle.kts"
-            "android-wrapper/app/src/main/AndroidManifest.xml"
-            "android-wrapper/app/src/main/java/com/songdna/studio/MainActivity.kt"
-            "android-wrapper/app/src/main/assets/www/index.html"
-            "www/index.html"
-            "backend/server.js"
-          )
-
-          for file in "${REQUIRED_FILES[@]}"; do
-            if [[ ! -s "$file" ]]; then
-              echo "::error::Required source file missing or empty: $file"
-              exit 1
-            fi
-          done
-
-          if [[ -f "scripts/verify-source.py" ]]; then
-            python3 scripts/verify-source.py
-          else
-            echo "::warning::scripts/verify-source.py is not included; structural checks were completed."
-          fi
-
-      - name: Build SONGDNA Studio 3.0.0 APK
+      - name: Build debug APK
         shell: bash
         run: |
           set -euo pipefail
@@ -140,6 +112,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           APK="$PROJECT_ROOT/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
           if [[ ! -s "$APK" ]]; then
@@ -147,15 +120,60 @@ jobs:
             exit 1
           fi
 
-          echo "APK generated successfully:"
           ls -lh "$APK"
           sha256sum "$APK"
 
-      - name: Upload SONGDNA Studio 3.0.0 APK
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-Studio-3.0.0-Gemini-debug-APK
+          name: SONGDNA-Studio-4.0.2-debug-APK
           path: ${{ env.PROJECT_ROOT }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
-          
+
+      - name: Configure release signing when all secrets exist
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.SONGDNA_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SONGDNA_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SONGDNA_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SONGDNA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            KEYSTORE_PATH="$RUNNER_TEMP/songdna-release.jks"
+            printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
+            test -s "$KEYSTORE_PATH"
+
+            {
+              echo "SONGDNA_KEYSTORE_FILE=$KEYSTORE_PATH"
+              echo "SONGDNA_KEYSTORE_PASSWORD=$STORE_PASSWORD"
+              echo "SONGDNA_KEY_ALIAS=$KEY_ALIAS"
+              echo "SONGDNA_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Signing secrets are not configured. Debug APK only."
+          fi
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.enabled == 'true'
+        run: |
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            -p "$PROJECT_ROOT/android-wrapper" \
+            assembleRelease
+
+      - name: Upload signed release APK
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SONGDNA-Studio-4.0.2-signed-release-APK
+          path: ${{ env.PROJECT_ROOT }}/android-wrapper/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
