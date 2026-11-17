@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   build:
-    name: Extract, validate and build APK
+    name: Extract, clean, validate and build APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
@@ -21,28 +21,32 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Locate and extract 4.7.0 package
+      - name: Locate and safely extract 4.7.0 package
         shell: bash
         run: |
           set -euo pipefail
 
           ZIP_FILE="SONGDNA_Studio_4_7_0_Developer_Package.zip"
+          PACKAGE_COPY="$RUNNER_TEMP/SONGDNA_Studio_4_7_0_Developer_Package.zip"
+          EXTRACT_DIR="$RUNNER_TEMP/songdna-source"
 
           if [[ ! -f "$ZIP_FILE" ]]; then
             echo "::error::4.7.0 ZIP package not found in repository root."
-            echo "Available 4.7.0 packages:"
-            find . -maxdepth 1 -iname '*4_7_0*.zip' -print
+            echo "Available ZIP files:"
+            find . -maxdepth 2 -type f -iname '*.zip' -print
             exit 1
           fi
 
-          mkdir -p "$RUNNER_TEMP/songdna-source"
-          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-source"
+          cp "$ZIP_FILE" "$PACKAGE_COPY"
 
-          SOURCE_DIR="$RUNNER_TEMP/songdna-source/SONGDNA-Studio-4.7.0"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$PACKAGE_COPY" -d "$EXTRACT_DIR"
+
+          SOURCE_DIR="$EXTRACT_DIR/SONGDNA-Studio-4.7.0"
 
           if [[ ! -d "$SOURCE_DIR" ]]; then
-            echo "::error::Expected source folder was not found inside ZIP."
-            find "$RUNNER_TEMP/songdna-source" -maxdepth 3 -type d -print
+            echo "::error::Expected SONGDNA-Studio-4.7.0 folder was not found."
+            find "$EXTRACT_DIR" -maxdepth 4 -type d -print
             exit 1
           fi
 
@@ -56,7 +60,7 @@ jobs:
 
           echo "SONGDNA Studio 4.7.0 source extracted successfully."
 
-      - name: Remove nested ZIP archives
+      - name: Remove all ZIP archives from build workspace
         shell: bash
         run: |
           set -euo pipefail
@@ -64,27 +68,21 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          folders = ("www", "android-wrapper", "backend", "scripts")
+          root = Path.cwd()
           removed = []
 
-          for name in folders:
-              folder = Path(name)
-              if not folder.exists():
-                  continue
-
-              for item in folder.rglob("*"):
-                  if item.suffix.lower() == ".zip" and (item.is_file() or item.is_symlink()):
-                      removed.append(str(item))
-                      item.unlink()
-
-          print("Removed nested ZIP archives:")
+          for item in root.rglob("*"):
+              if item.suffix.lower() == ".zip" and (item.is_file() or item.is_symlink()):
+                  removed.append(item)
+          
           for item in removed:
-              print(" -", item)
+              print("Removing:", item.relative_to(root))
+              item.unlink()
 
-          print(f"Total removed: {len(removed)}")
+          print(f"ZIP cleanup completed. Removed: {len(removed)}")
           PY
 
-      - name: Verify no nested ZIP archives remain
+      - name: Verify ZIP cleanup
         shell: bash
         run: |
           set -euo pipefail
@@ -92,23 +90,19 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
-          folders = ("www", "android-wrapper", "backend", "scripts")
-          remaining = []
-
-          for name in folders:
-              folder = Path(name)
-              if folder.exists():
-                  for item in folder.rglob("*"):
-                      if item.suffix.lower() == ".zip" and (item.is_file() or item.is_symlink()):
-                          remaining.append(str(item))
+          remaining = [
+              item for item in Path.cwd().rglob("*")
+              if item.suffix.lower() == ".zip"
+              and (item.is_file() or item.is_symlink())
+          ]
 
           if remaining:
-              print("ERROR: Nested ZIP archives still exist:")
+              print("ERROR: ZIP archives remain:")
               for item in remaining:
-                  print(" -", item)
+                  print(item)
               raise SystemExit(1)
 
-          print("PASS: No nested ZIP archives remain.")
+          print("PASS: No ZIP archives remain in build workspace.")
           PY
 
       - name: Set up Java 17
@@ -146,7 +140,11 @@ jobs:
           fi
 
       - name: Install Android SDK components
-        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -154,10 +152,17 @@ jobs:
           gradle-version: '8.9'
 
       - name: Validate source
-        run: python3 scripts/verify-source.py
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/verify-source.py
 
       - name: Build debug APK
-        run: gradle --no-daemon --stacktrace --warning-mode all -p android-wrapper clean assembleDebug
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --stacktrace --warning-mode all \
+            -p android-wrapper clean assembleDebug
 
       - name: Verify APK
         shell: bash
@@ -171,6 +176,7 @@ jobs:
             exit 1
           fi
 
+          echo "APK successfully created:"
           ls -lh "$APK"
 
       - name: Upload debug APK
@@ -194,6 +200,7 @@ jobs:
 
           if [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
             KEYSTORE_PATH="$RUNNER_TEMP/songdna-release.jks"
+
             printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
             test -s "$KEYSTORE_PATH"
 
@@ -212,7 +219,11 @@ jobs:
 
       - name: Build signed release APK
         if: steps.signing.outputs.enabled == 'true'
-        run: gradle --no-daemon --stacktrace -p android-wrapper assembleRelease
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --stacktrace \
+            -p android-wrapper assembleRelease
 
       - name: Upload signed release APK
         if: steps.signing.outputs.enabled == 'true'
