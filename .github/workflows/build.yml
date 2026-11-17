@@ -68,26 +68,15 @@ jobs:
           python-version: '3.x'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          set +e
-          yes | sdkmanager --licenses
-          PIPE_STATUS=("${PIPESTATUS[@]}")
-          set -e
-
-          SDKMANAGER_STATUS="${PIPE_STATUS[1]}"
-
-          if [[ "$SDKMANAGER_STATUS" -ne 0 ]]; then
-            echo "::error::Android SDK license acceptance failed."
-            exit "$SDKMANAGER_STATUS"
-          fi
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK components
         shell: bash
         run: |
+          set -euo pipefail
+
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -109,18 +98,24 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gradle --no-daemon --stacktrace --warning-mode all \
+
+          gradle --no-daemon --stacktrace \
             -p "$PROJECT_DIR/android-wrapper" \
             clean assembleDebug
 
-      - name: Verify debug APK
+      - name: Verify and copy debug APK
         shell: bash
         run: |
           set -euo pipefail
+
           APK="$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+
           test -s "$APK"
+
           mkdir -p "$GITHUB_WORKSPACE/apk-output"
-          cp "$APK" "$GITHUB_WORKSPACE/apk-output/SONGDNA-Studio-4.3.2-debug.apk"
+
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/apk-output/SONGDNA-Studio-4.3.2-debug.apk"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -147,7 +142,9 @@ jobs:
                 -n "$KEY_PASSWORD" ]]; then
 
             KEYSTORE_PATH="$RUNNER_TEMP/songdna-release.jks"
+
             printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
+
             test -s "$KEYSTORE_PATH"
 
             {
@@ -168,6 +165,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           gradle --no-daemon --stacktrace \
             -p "$PROJECT_DIR/android-wrapper" \
             assembleRelease
@@ -177,9 +175,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           APK="$PROJECT_DIR/android-wrapper/app/build/outputs/apk/release/app-release.apk"
+
           test -s "$APK"
-          cp "$APK" "$GITHUB_WORKSPACE/apk-output/SONGDNA-Studio-4.3.2-release.apk"
+
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/apk-output/SONGDNA-Studio-4.3.2-release.apk"
 
       - name: Upload signed release APK
         if: steps.signing.outputs.enabled == 'true'
