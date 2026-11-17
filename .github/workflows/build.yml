@@ -1,109 +1,25 @@
 
-name: SONGDNA Studio 4.7.0 - Android APK
+name: SONGDNA Studio 4.8.0 - Android APK
 
-'on':
+on:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-studio-4-7-0-android-build
+  group: songdna-studio-4-8-0-android-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Extract, clean, validate and build APK
+    name: Validate and build SONGDNA 4.8.0 APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
-
-      - name: Locate and safely extract 4.7.0 package
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP_FILE="SONGDNA_Studio_4_7_0_Developer_Package.zip"
-          PACKAGE_COPY="$RUNNER_TEMP/SONGDNA_Studio_4_7_0_Developer_Package.zip"
-          EXTRACT_DIR="$RUNNER_TEMP/songdna-source"
-
-          if [[ ! -f "$ZIP_FILE" ]]; then
-            echo "::error::4.7.0 ZIP package not found in repository root."
-            echo "Available ZIP files:"
-            find . -maxdepth 2 -type f -iname '*.zip' -print
-            exit 1
-          fi
-
-          cp "$ZIP_FILE" "$PACKAGE_COPY"
-
-          mkdir -p "$EXTRACT_DIR"
-          unzip -q "$PACKAGE_COPY" -d "$EXTRACT_DIR"
-
-          SOURCE_DIR="$EXTRACT_DIR/SONGDNA-Studio-4.7.0"
-
-          if [[ ! -d "$SOURCE_DIR" ]]; then
-            echo "::error::Expected SONGDNA-Studio-4.7.0 folder was not found."
-            find "$EXTRACT_DIR" -maxdepth 4 -type d -print
-            exit 1
-          fi
-
-          if [[ ! -f "$SOURCE_DIR/scripts/verify-source.py" ]]; then
-            echo "::error::Source validation script is missing."
-            exit 1
-          fi
-
-          rsync -a "$SOURCE_DIR/" "$GITHUB_WORKSPACE/" \
-            --exclude='.git/'
-
-          echo "SONGDNA Studio 4.7.0 source extracted successfully."
-
-      - name: Remove all ZIP archives from build workspace
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          root = Path.cwd()
-          removed = []
-
-          for item in root.rglob("*"):
-              if item.suffix.lower() == ".zip" and (item.is_file() or item.is_symlink()):
-                  removed.append(item)
-          
-          for item in removed:
-              print("Removing:", item.relative_to(root))
-              item.unlink()
-
-          print(f"ZIP cleanup completed. Removed: {len(removed)}")
-          PY
-
-      - name: Verify ZIP cleanup
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-
-          remaining = [
-              item for item in Path.cwd().rglob("*")
-              if item.suffix.lower() == ".zip"
-              and (item.is_file() or item.is_symlink())
-          ]
-
-          if remaining:
-              print("ERROR: ZIP archives remain:")
-              for item in remaining:
-                  print(item)
-              raise SystemExit(1)
-
-          print("PASS: No ZIP archives remain in build workspace.")
-          PY
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -116,11 +32,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Set up Python 3
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
@@ -129,14 +40,11 @@ jobs:
         run: |
           set +e
           yes | sdkmanager --licenses
-          PIPE_STATUS=("${PIPESTATUS[@]}")
+          status=${PIPESTATUS[1]}
           set -e
-
-          SDKMANAGER_STATUS="${PIPE_STATUS[1]}"
-
-          if [[ "$SDKMANAGER_STATUS" -ne 0 ]]; then
+          if [ "$status" -ne 0 ]; then
             echo "::error::Android SDK license acceptance failed."
-            exit "$SDKMANAGER_STATUS"
+            exit "$status"
           fi
 
       - name: Install Android SDK components
@@ -151,38 +59,24 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Validate source
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 scripts/verify-source.py
+      - name: Verify 4.8.0 source
+        run: python3 scripts/verify-source.py
 
       - name: Build debug APK
-        shell: bash
         run: |
-          set -euo pipefail
-          gradle --no-daemon --stacktrace --warning-mode all \
-            -p android-wrapper clean assembleDebug
+          gradle --no-daemon --stacktrace \
+            --warning-mode all \
+            -p android-wrapper \
+            clean assembleDebug
 
-      - name: Verify APK
-        shell: bash
+      - name: Verify debug APK
         run: |
-          set -euo pipefail
-
-          APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [[ ! -s "$APK" ]]; then
-            echo "::error::APK was not created."
-            exit 1
-          fi
-
-          echo "APK successfully created:"
-          ls -lh "$APK"
+          test -s android-wrapper/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-Studio-4.7.0-debug-APK
+          name: SONGDNA-Studio-4.8.0-debug-APK
           path: android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
@@ -198,7 +92,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+          if [[ -n "$KEYSTORE_B64" &&
+                -n "$STORE_PASSWORD" &&
+                -n "$KEY_ALIAS" &&
+                -n "$KEY_PASSWORD" ]]; then
+
             KEYSTORE_PATH="$RUNNER_TEMP/songdna-release.jks"
 
             printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
@@ -214,22 +112,21 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Release signing secrets are incomplete; skipping signed release."
+            echo "Signing secrets incomplete. Release APK skipped."
           fi
 
       - name: Build signed release APK
         if: steps.signing.outputs.enabled == 'true'
-        shell: bash
         run: |
-          set -euo pipefail
           gradle --no-daemon --stacktrace \
-            -p android-wrapper assembleRelease
+            -p android-wrapper \
+            assembleRelease
 
       - name: Upload signed release APK
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-Studio-4.7.0-signed-release-APK
+          name: SONGDNA-Studio-4.8.0-signed-release-APK
           path: android-wrapper/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30
