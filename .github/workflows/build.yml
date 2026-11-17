@@ -13,13 +13,42 @@ concurrency:
 
 jobs:
   build:
-    name: Build SONGDNA Studio 4.6.1 APK
+    name: Extract, validate and build SONGDNA 4.6.1 APK
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 35
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Extract uploaded 4.6.1 developer ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/songdna-source"
+
+          ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*4_6_1*GitHub*Fix*.zip' -print -quit)"
+
+          if [[ -z "$ZIP_FILE" ]]; then
+            ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*4_6_1*Developer*Package*.zip' -print -quit)"
+          fi
+
+          if [[ -z "$ZIP_FILE" ]]; then
+            echo "::error::4.6.1 ZIP not found in repository root."
+            ls -la
+            exit 1
+          fi
+
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-source"
+
+          PROJECT_DIR="$(find "$RUNNER_TEMP/songdna-source" -type f -path '*/scripts/verify-source.py' -print -quit | sed 's#/scripts/verify-source.py$##')"
+
+          if [[ -z "$PROJECT_DIR" || ! -d "$PROJECT_DIR/android-wrapper" ]]; then
+            echo "::error::Project files not found inside ZIP."
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -32,13 +61,8 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Set up Python 3
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
       - name: Accept Android SDK licenses
         shell: bash
@@ -56,35 +80,38 @@ jobs:
           fi
 
       - name: Install Android SDK components
-        run: |
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Validate SONGDNA 4.6.1 source
-        run: python3 scripts/verify-source.py
+      - name: Validate source
+        run: python3 "$PROJECT_DIR/scripts/verify-source.py"
 
       - name: Build debug APK
-        run: |
-          gradle --no-daemon --stacktrace \
-            --warning-mode all \
-            -p android-wrapper clean assembleDebug
+        run: gradle --no-daemon --stacktrace --warning-mode all -p "$PROJECT_DIR/android-wrapper" clean assembleDebug
 
-      - name: Verify APK
+      - name: Verify and stage debug APK
+        shell: bash
         run: |
-          test -s android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          set -euo pipefail
 
-      - name: Upload SONGDNA Studio 4.6.1 APK
+          APK="$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -s "$APK"
+
+          mkdir -p dist
+          cp "$APK" dist/SONGDNA-Studio-4.6.1-debug.apk
+
+          ls -lh dist/SONGDNA-Studio-4.6.1-debug.apk
+
+      - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-Studio-4.6.1-debug-APK
-          path: android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          path: dist/SONGDNA-Studio-4.6.1-debug.apk
           if-no-files-found: error
           retention-days: 14
           
