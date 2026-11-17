@@ -21,6 +21,61 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
+      - name: Extract SONGDNA Studio 4.8.0 package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE="$(find . -maxdepth 1 -type f \
+            -iname '*4_8_0*Developer*Package*.zip' \
+            -print -quit)"
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "::error::SONGDNA 4.8.0 Developer ZIP not found."
+            exit 1
+          fi
+
+          python3 - "$ZIP_FILE" <<'PY'
+          from pathlib import Path
+          from zipfile import ZipFile
+          import shutil
+          import sys
+
+          archive = Path(sys.argv[1])
+          temp = Path("/tmp/songdna-4.8.0")
+          shutil.rmtree(temp, ignore_errors=True)
+          temp.mkdir(parents=True)
+
+          with ZipFile(archive) as z:
+              z.extractall(temp)
+
+          candidates = [
+              p for p in temp.iterdir()
+              if p.is_dir() and p.name == "SONGDNA-Studio-4.8.0"
+          ]
+
+          if len(candidates) != 1:
+              raise SystemExit("Expected one SONGDNA-Studio-4.8.0 folder.")
+
+          source = candidates[0]
+          root = Path.cwd()
+
+          for item in source.iterdir():
+              target = root / item.name
+              if item.is_dir():
+                  shutil.copytree(item, target, dirs_exist_ok=True)
+              else:
+                  shutil.copy2(item, target)
+
+          print("SONGDNA Studio 4.8.0 package extracted successfully.")
+          PY
+
+          test -f scripts/verify-source.py
+          test -f .github/workflows/build-apk.yml
+          test -d android-wrapper
+          test -d backend
+          test -d www
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
@@ -112,7 +167,7 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Signing secrets incomplete. Release APK skipped."
+            echo "Release signing secrets incomplete. Release APK skipped."
           fi
 
       - name: Build signed release APK
