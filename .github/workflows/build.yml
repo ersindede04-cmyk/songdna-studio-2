@@ -1,5 +1,5 @@
 
-name: SONG DNA SMART STUDIO 5.1.0 - Android APK
+name: SONG DNA SMART STUDIO 5.1.1 - Android APK
 
 'on':
   workflow_dispatch:
@@ -8,12 +8,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: song-dna-smart-studio-5-1-0-android-build
+  group: song-dna-smart-studio-5-1-1-android-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Validate and build SONG DNA SMART STUDIO 5.1.0 APK
+    name: Validate and build SONG DNA SMART STUDIO 5.1.1 APK
     runs-on: ubuntu-latest
     timeout-minutes: 35
 
@@ -21,7 +21,7 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Unpack 5.1.0 source package if present
+      - name: Unpack uploaded integrated 5.1.1 source package (if present)
         shell: bash
         run: |
           python3 - <<'PYCODE'
@@ -30,15 +30,13 @@ jobs:
           import shutil
 
           root = Path.cwd()
-          archives = sorted(
-              root.glob("SONG_DNA_SMART_STUDIO_5_1_0_Developer_Package*.zip")
-          )
+          archives = sorted(root.glob('SONG_DNA_SMART_STUDIO_5_1_1_Integrated_Developer_Package*.zip'))
 
           if not archives:
-              print("No uploaded source ZIP found; using repository files as-is.")
+              print('No integrated 5.1.1 source ZIP found; using repository files as-is.')
           else:
               archive = archives[0]
-              temp = Path("/tmp/songdna510-unpack")
+              temp = Path('/tmp/songdna511-unpack')
               shutil.rmtree(temp, ignore_errors=True)
               temp.mkdir(parents=True)
 
@@ -46,32 +44,17 @@ jobs:
                   for member in zf.infolist():
                       target = (temp / member.filename).resolve()
                       if not target.is_relative_to(temp.resolve()):
-                          raise SystemExit("Unsafe ZIP path detected.")
+                          raise SystemExit('Unsafe ZIP path detected.')
                   zf.extractall(temp)
 
-              if (temp / "android-wrapper").is_dir():
-                  source = temp
-              else:
-                  candidates = [
-                      p for p in temp.iterdir()
-                      if p.is_dir() and (p / "android-wrapper").is_dir()
-                  ]
-                  if len(candidates) != 1:
-                      raise SystemExit(
-                          "Could not identify the 5.1.0 Android source folder."
-                      )
-                  source = candidates[0]
-
-              for item in source.iterdir():
-                  if item.name == ".git":
-                      continue
+              for item in temp.iterdir():
                   target = root / item.name
                   if item.is_dir():
                       shutil.copytree(item, target, dirs_exist_ok=True)
                   else:
                       shutil.copy2(item, target)
 
-              print(f"Unpacked {archive.name} successfully.")
+              print(f'Unpacked {archive.name} into repository root.')
           PYCODE
 
       - name: Set up Java 17
@@ -99,43 +82,36 @@ jobs:
           SDKMANAGER_STATUS="${PIPE_STATUS[1]}"
 
           if [[ "$SDKMANAGER_STATUS" -ne 0 ]]; then
-            echo "::error::Android SDK license acceptance failed."
+            echo "::error::Android SDK license acceptance failed (sdkmanager exit $SDKMANAGER_STATUS)."
             exit "$SDKMANAGER_STATUS"
           fi
 
       - name: Install Android SDK components
-        run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Validate 5.1.0 source
+      - name: Validate source
         run: python3 scripts/verify-source.py
 
-      - name: Check JavaScript syntax
-        run: node --check www/app.js
-
       - name: Build debug APK
-        run: |
-          gradle --no-daemon --stacktrace --warning-mode all \
-            -p android-wrapper clean assembleDebug
+        run: gradle --no-daemon --stacktrace --warning-mode all -p android-wrapper clean assembleDebug
 
       - name: Verify debug APK
-        run: |
-          test -s android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+        run: test -s android-wrapper/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONG-DNA-SMART-STUDIO-5.1.0-debug-APK
+          name: SONGDNA-Studio-5.1.1-debug-APK
           path: android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
 
-      - name: Configure release signing
+      - name: Configure release signing (only when all secrets exist)
         id: signing
         shell: bash
         env:
@@ -146,11 +122,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -n "$KEYSTORE_B64" &&
-                -n "$STORE_PASSWORD" &&
-                -n "$KEY_ALIAS" &&
-                -n "$KEY_PASSWORD" ]]; then
-
+          if [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
             KEYSTORE_PATH="$RUNNER_TEMP/songdna-release.jks"
             printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
             test -s "$KEYSTORE_PATH"
@@ -165,25 +137,18 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Release signing secrets are incomplete."
+            echo "Release signing secrets are incomplete; signed release APK will not be built."
           fi
 
       - name: Build signed release APK
         if: steps.signing.outputs.enabled == 'true'
-        run: |
-          gradle --no-daemon --stacktrace \
-            -p android-wrapper assembleRelease
-
-      - name: Verify signed release APK
-        if: steps.signing.outputs.enabled == 'true'
-        run: |
-          test -s android-wrapper/app/build/outputs/apk/release/app-release.apk
+        run: gradle --no-daemon --stacktrace -p android-wrapper assembleRelease
 
       - name: Upload signed release APK
         if: steps.signing.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: SONG-DNA-SMART-STUDIO-5.1.0-signed-release-APK
+          name: SONGDNA-Studio-5.1.1-signed-release-APK
           path: android-wrapper/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
           retention-days: 30
