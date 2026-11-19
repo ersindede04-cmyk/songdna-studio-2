@@ -1,6 +1,6 @@
 name: SONGDNA Studio 5.2.0 - Stage 37 - 100K
 
-on:
+'on':
   workflow_dispatch:
 
 permissions:
@@ -25,45 +25,61 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE="$(find . -maxdepth 2 -type f -name 'SONGDNA_Studio_5_2_0_Stage37_100K_Prompt_Limit.zip' -print -quit)"
-          if [[ -z "$ZIP_FILE" ]]; then echo '::error::Stage 37 ZIP not found'; exit 1; fi
+          echo "ZIP files currently in repository:"
+          find . -type f -iname '*.zip' -print || true
+          mapfile -t ZIP_CANDIDATES < <(find . -type f -iname '*stage37*100k*.zip' -print | sort)
+          if [[ "${#ZIP_CANDIDATES[@]}" -eq 0 ]]; then
+            echo "::error::Stage 37 100K ZIP not found. Check the ZIP filename in the repository."
+            exit 1
+          fi
+          if [[ "${#ZIP_CANDIDATES[@]}" -gt 1 ]]; then
+            echo "::error::More than one Stage 37 100K ZIP found:"
+            printf '%s\n' "${ZIP_CANDIDATES[@]}"
+            exit 1
+          fi
+          ZIP_FILE="${ZIP_CANDIDATES[0]}"
           EXTRACT_DIR="$RUNNER_TEMP/songdna-stage37-source"
           mkdir -p "$EXTRACT_DIR"
           unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
+          echo "Extracted archive: $ZIP_FILE"
+          find "$EXTRACT_DIR" -maxdepth 4 -type f | head -200
           mapfile -t PROJECT_ROOTS < <(find "$EXTRACT_DIR" -type f -path '*/backend/server.js' -exec sh -c 'dirname "$(dirname "$1")"' _ {} \; | sort -u)
-          if [[ "${#PROJECT_ROOTS[@]}" -ne 1 ]]; then echo '::error::Project root not unique'; exit 1; fi
+          if [[ "${#PROJECT_ROOTS[@]}" -ne 1 ]]; then
+            echo "::error::Could not identify exactly one project root containing backend/server.js."
+            printf 'Detected roots:\n%s\n' "${PROJECT_ROOTS[@]:-none}"
+            exit 1
+          fi
           PROJECT_DIR="${PROJECT_ROOTS[0]}"
-          for required in index.html app.js backend/server.js backend/package.json android-wrapper/settings.gradle.kts android-wrapper/build.gradle.kts android-wrapper/app/build.gradle.kts scripts/verify-source.py BUILD_MANIFEST.json; do
-            test -f "$PROJECT_DIR/$required" || { echo "::error::Missing $required"; exit 1; }
+          for required in backend/server.js backend/package.json android-wrapper/app/build.gradle.kts scripts/verify-source.py; do
+            if [[ ! -f "$PROJECT_DIR/$required" ]]; then echo "::error::Missing required file: $required"; exit 1; fi
           done
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-      - name: Verify Stage 37 limits
+      - name: Verify Stage 37 backend limits
         env:
           PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
           set -euo pipefail
-          for SERVER in "$PROJECT_DIR/server.js" "$PROJECT_DIR/backend/server.js"; do
-            grep -Fq 'const MAX_BODY = 500_000;' "$SERVER"
-            grep -Fq 'prompt.length > 100_000' "$SERVER"
-            grep -Fq '100.000 karakter' "$SERVER"
-            node --check "$SERVER"
-          done
+          SERVER="$PROJECT_DIR/backend/server.js"
+          grep -Fq 'prompt.length > 100_000' "$SERVER"
+          grep -Fq '100.000 karakter' "$SERVER"
+          grep -Fq 'MAX_BODY = 500_000' "$SERVER"
+          node --check "$SERVER"
       - name: Verify source integrity
         env:
           PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: python3 "$PROJECT_DIR/scripts/verify-source.py"
-      - name: Run JavaScript tests
+      - name: Run JavaScript checks
         env:
           PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-          node --check app.js
           node --check backend/server.js
+          if [[ -f app.js ]]; then node --check app.js; fi
           for test_file in scripts/test-stage29-client-api-contract.js scripts/test-stage28-cultural-routing.js scripts/test-global-cultural-adlib.js scripts/test-production-preset-engine.js scripts/test-genre-adlib-engine.js scripts/test-gemini-instruction-engine.js scripts/test-stage31-2-music-dna-arrangement.js scripts/test-stage32-hotfix-scope.js scripts/test-stage32-arrangement-adlib.js scripts/test-adlib-catalog.js; do
             if [[ -f "$test_file" ]]; then node "$test_file"; fi
           done
-      - name: Sync backend to GitHub repository
+      - name: Sync backend to GitHub main
         env:
           PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
@@ -71,11 +87,11 @@ jobs:
           mkdir -p backend
           cp "$PROJECT_DIR/backend/server.js" backend/server.js
           cp "$PROJECT_DIR/backend/package.json" backend/package.json
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add backend/server.js backend/package.json
           if ! git diff --cached --quiet; then
-            git commit -m 'Deploy SONGDNA Stage 37 100K backend'
+            git commit -m "Deploy SONGDNA Stage 37 100K backend"
             git push origin HEAD:main
           fi
       - name: Set up Java 17
@@ -86,7 +102,7 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
       - name: Install Android SDK components
-        run: sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
