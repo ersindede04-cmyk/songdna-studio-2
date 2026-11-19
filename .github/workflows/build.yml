@@ -1,101 +1,247 @@
 
 name: SONGDNA SMART STUDIO 5.2.0 - Stage 60 APK Build
 
-on:
+'on':
   workflow_dispatch:
   push:
     branches:
       - main
     paths:
-      - "stage58_work/**"
-      - ".github/workflows/build.yml"
+      - 'SONGDNA_Studio_5_2_0_Stage60_Production_Model_Editing.zip'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: songdna-stage60-android-build
+  cancel-in-progress: false
 
 jobs:
   build:
     name: Build SONGDNA 5.2.0 APK
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: stage58_work
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Extract Stage 60 source ZIP
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ZIP_FILE="SONGDNA_Studio_5_2_0_Stage60_Production_Model_Editing.zip"
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::Stage 60 source ZIP not found: $ZIP_FILE"
+            exit 1
+          fi
+
+          EXTRACT_DIR="$GITHUB_WORKSPACE/stage60_build_source"
+
+          rm -rf "$EXTRACT_DIR"
+          mkdir -p "$EXTRACT_DIR"
+
+          unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
+
+          mapfile -t PROJECT_ROOTS < <(
+            find "$EXTRACT_DIR" -type f \
+              -path '*/backend/server.js' \
+              -printf '%h\n' |
+              sed 's#/backend$##' |
+              sort -u
+          )
+
+          if [ "${#PROJECT_ROOTS[@]}" -ne 1 ]; then
+            echo "::error::Expected one Stage 60 project root."
+            printf '%s\n' "${PROJECT_ROOTS[@]}"
+            exit 1
+          fi
+
+          PROJECT_ROOT="${PROJECT_ROOTS[0]}"
+
+          for required in \
+            BUILD_MANIFEST.json \
+            index.html \
+            app.js \
+            backend/server.js \
+            scripts/verify-source.py \
+            scripts/test-stage60-production-model-editing.js \
+            android-wrapper/settings.gradle.kts \
+            android-wrapper/build.gradle.kts \
+            android-wrapper/app/build.gradle.kts \
+            android-wrapper/app/src/main/AndroidManifest.xml
+          do
+            if [ ! -f "$PROJECT_ROOT/$required" ]; then
+              echo "::error::Missing Stage 60 file: $required"
+              exit 1
+            fi
+          done
+
+          echo "project_root=$PROJECT_ROOT" >> "$GITHUB_OUTPUT"
+
+          echo "Stage 60 source extracted successfully."
+          echo "Project root: $PROJECT_ROOT"
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: '20'
 
-      - name: Set up Python
+      - name: Set up Python 3
         uses: actions/setup-python@v5
         with:
-          python-version: "3.x"
+          python-version: '3.x'
 
-      - name: Set up Android SDK and accept licenses
-        uses: android-actions/setup-android@v4
-        with:
-          cmdline-tools-version: "15859902"
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
-          packages: "platform-tools platforms;android-35 build-tools;35.0.0"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: '8.9'
 
-      - name: Verify Stage 60 project files
+      - name: Verify Stage 60 source files
+        working-directory: ${{ steps.extract.outputs.project_root }}
+        shell: bash
         run: |
-          test -f BUILD_MANIFEST.json
-          test -f android-wrapper/settings.gradle.kts
-          test -f android-wrapper/build.gradle.kts
-          test -f android-wrapper/app/build.gradle.kts
-          test -f android-wrapper/app/src/main/AndroidManifest.xml
-          test -f www/app.js
-          test -f www/production-model-library.js
-          test -f scripts/verify-source.py
+          set -euo pipefail
+
+          python3 scripts/verify-source.py
+
+          echo "Stage 60 project files verified."
 
       - name: Validate JavaScript
+        working-directory: ${{ steps.extract.outputs.project_root }}
+        shell: bash
         run: |
+          set -euo pipefail
+
           node --check www/app.js
-          node --check www/production-model-library.js
+          node --check app.js
+          node --check production-model-library.js
+          node --check server.js
           node --check backend/server.js
 
-      - name: Verify Stage 60 source
-        run: |
-          python scripts/verify-source.py
+          echo "JavaScript syntax validation passed."
 
       - name: Verify Android WebView assets
+        working-directory: ${{ steps.extract.outputs.project_root }}
+        shell: bash
         run: |
-          diff -qr www android-wrapper/app/src/main/assets/www
+          set -euo pipefail
+
+          diff -qr \
+            www \
+            android-wrapper/app/src/main/assets/www
+
+          echo "Android WebView assets verified."
+
+      - name: Run JavaScript tests
+        working-directory: ${{ steps.extract.outputs.project_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TEST_COUNT=0
+
+          while IFS= read -r TEST_FILE; do
+            echo "Running: $TEST_FILE"
+            node "$TEST_FILE"
+            TEST_COUNT=$((TEST_COUNT + 1))
+          done < <(
+            find scripts tests -type f -name 'test-*.js' | sort
+          )
+
+          if [ -f test-gemini-instruction-engine.js ]; then
+            node test-gemini-instruction-engine.js
+            TEST_COUNT=$((TEST_COUNT + 1))
+          fi
+
+          echo "JavaScript test files passed: $TEST_COUNT"
+
+      - name: Run Python tests
+        working-directory: ${{ steps.extract.outputs.project_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TEST_COUNT=0
+
+          while IFS= read -r TEST_FILE; do
+            echo "Running: $TEST_FILE"
+            python3 "$TEST_FILE"
+            TEST_COUNT=$((TEST_COUNT + 1))
+          done < <(
+            find scripts tests -type f -name 'test-*.py' | sort
+          )
+
+          echo "Python test files passed: $TEST_COUNT"
+
+      - name: Check backend
+        working-directory: ${{ steps.extract.outputs.project_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          npm --prefix backend run check
 
       - name: Build debug APK
-        working-directory: stage58_work/android-wrapper
+        working-directory: ${{ steps.extract.outputs.project_root }}/android-wrapper
+        shell: bash
         run: |
-          gradle clean assembleDebug
+          set -euo pipefail
+
+          gradle --no-daemon --stacktrace \
+            --warning-mode all \
+            clean assembleDebug
 
       - name: Verify debug APK
-        working-directory: stage58_work
+        working-directory: ${{ steps.extract.outputs.project_root }}
+        shell: bash
         run: |
-          test -f android-wrapper/app/build/outputs/apk/debug/app-debug.apk
-          ls -lh android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          set -euo pipefail
+
+          APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "::error::Debug APK was not generated."
+            exit 1
+          fi
+
+          echo "APK generated successfully."
+          ls -lh "$APK"
+          sha256sum "$APK"
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-Studio-5.2.0-Stage60-debug-APK
-          path: stage58_work/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.extract.outputs.project_root }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
           
