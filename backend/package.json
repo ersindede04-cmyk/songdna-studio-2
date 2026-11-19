@@ -1,9 +1,14 @@
 {
-  "name": "songdna-ai-api",
-  "version": "1.0.0",
+  "name": "songdna-studio-api",
+  "version": "5.2.0",
   "private": true,
+  "description": "SONGDNA Studio 5.2.0 Suno Prompt Engine",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
