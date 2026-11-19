@@ -1,7 +1,6 @@
-
 name: SONGDNA Studio 5.2.0 - Stage 37 - 100K
 
-'on':
+on:
   workflow_dispatch:
 
 permissions:
@@ -13,150 +12,97 @@ concurrency:
 
 jobs:
   build:
-    name: Extract, sync backend and build APK
+    name: Extract ZIP, verify, sync backend and build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Find and extract Stage 37 ZIP
+      - name: Find and extract Stage 37 source ZIP
+        id: extract
         shell: bash
         run: |
           set -euo pipefail
-
-          ZIP_FILE="$(find . -maxdepth 2 -type f \
-            -name 'SONGDNA_Studio_5_2_0_Stage37_100K_Prompt_Limit.zip' \
-            -print -quit)"
-
-          if [[ -z "$ZIP_FILE" ]]; then
-            echo "::error::Stage 37 ZIP dosyası repository içinde bulunamadı."
-            exit 1
-          fi
-
-          EXTRACT_DIR="$RUNNER_TEMP/songdna-stage37"
+          ZIP_FILE="$(find . -maxdepth 2 -type f -name 'SONGDNA_Studio_5_2_0_Stage37_100K_Prompt_Limit.zip' -print -quit)"
+          if [[ -z "$ZIP_FILE" ]]; then echo '::error::Stage 37 ZIP not found'; exit 1; fi
+          EXTRACT_DIR="$RUNNER_TEMP/songdna-stage37-source"
           mkdir -p "$EXTRACT_DIR"
           unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
-
-          mapfile -t PROJECTS < <(
-            find "$EXTRACT_DIR" -type f \
-              -path '*/backend/server.js' \
-              -exec dirname {} \; |
-            while read -r backend_dir; do
-              dirname "$backend_dir"
-            done |
-            sort -u
-          )
-
-          if [[ "${#PROJECTS[@]}" -ne 1 ]]; then
-            echo "::error::Gerçek proje klasörü tekil olarak tespit edilemedi."
-            exit 1
-          fi
-
-          PROJECT_DIR="${PROJECTS[0]}"
-
-          test -f "$PROJECT_DIR/app.js"
-          test -f "$PROJECT_DIR/backend/server.js"
-          test -f "$PROJECT_DIR/android-wrapper/app/build.gradle.kts"
-          test -f "$PROJECT_DIR/scripts/verify-source.py"
-
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Stage 37 kaynak paketi bulundu ve açıldı."
-          echo "Proje dizini: $PROJECT_DIR"
-
-      - name: Verify 100K backend limits
-        shell: bash
+          mapfile -t PROJECT_ROOTS < <(find "$EXTRACT_DIR" -type f -path '*/backend/server.js' -exec sh -c 'dirname "$(dirname "$1")"' _ {} \; | sort -u)
+          if [[ "${#PROJECT_ROOTS[@]}" -ne 1 ]]; then echo '::error::Project root not unique'; exit 1; fi
+          PROJECT_DIR="${PROJECT_ROOTS[0]}"
+          for required in index.html app.js backend/server.js backend/package.json android-wrapper/settings.gradle.kts android-wrapper/build.gradle.kts android-wrapper/app/build.gradle.kts scripts/verify-source.py BUILD_MANIFEST.json; do
+            test -f "$PROJECT_DIR/$required" || { echo "::error::Missing $required"; exit 1; }
+          done
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+      - name: Verify Stage 37 limits
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
           set -euo pipefail
-
-          SERVER="$PROJECT_DIR/backend/server.js"
-
-          grep -q 'prompt.length > 100_000' "$SERVER"
-          grep -q '100.000 karakter' "$SERVER"
-          grep -q 'MAX_BODY = 500_000' "$SERVER"
-
-          node --check "$SERVER"
-
-          echo "100.000 karakter istem sınırı doğrulandı."
-          echo "500.000 karakter istek gövdesi sınırı doğrulandı."
-
+          for SERVER in "$PROJECT_DIR/server.js" "$PROJECT_DIR/backend/server.js"; do
+            grep -Fq 'const MAX_BODY = 500_000;' "$SERVER"
+            grep -Fq 'prompt.length > 100_000' "$SERVER"
+            grep -Fq '100.000 karakter' "$SERVER"
+            node --check "$SERVER"
+          done
+      - name: Verify source integrity
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
+        run: python3 "$PROJECT_DIR/scripts/verify-source.py"
+      - name: Run JavaScript tests
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          node --check app.js
+          node --check backend/server.js
+          for test_file in scripts/test-stage29-client-api-contract.js scripts/test-stage28-cultural-routing.js scripts/test-global-cultural-adlib.js scripts/test-production-preset-engine.js scripts/test-genre-adlib-engine.js scripts/test-gemini-instruction-engine.js scripts/test-stage31-2-music-dna-arrangement.js scripts/test-stage32-hotfix-scope.js scripts/test-stage32-arrangement-adlib.js scripts/test-adlib-catalog.js; do
+            if [[ -f "$test_file" ]]; then node "$test_file"; fi
+          done
       - name: Sync backend to GitHub repository
-        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
           set -euo pipefail
-
           mkdir -p backend
-
           cp "$PROJECT_DIR/backend/server.js" backend/server.js
           cp "$PROJECT_DIR/backend/package.json" backend/package.json
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add backend/server.js backend/package.json
-
-          if git diff --cached --quiet; then
-            echo "Backend dosyaları zaten güncel."
-          else
-            git commit -m "Deploy SONGDNA Stage 37 100K backend"
+          if ! git diff --cached --quiet; then
+            git commit -m 'Deploy SONGDNA Stage 37 100K backend'
             git push origin HEAD:main
           fi
-
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-
-      - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          set -euo pipefail
-          yes | sdkmanager --licenses || true
-
       - name: Install Android SDK components
-        run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-
+        run: sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-
-      - name: Validate Stage 37 source
-        run: |
-          python3 "$PROJECT_DIR/scripts/verify-source.py"
-
-      - name: Build Android debug APK
-        run: |
-          gradle --no-daemon --stacktrace \
-            -p "$PROJECT_DIR/android-wrapper" \
-            clean assembleDebug
-
+      - name: Build APK from extracted ZIP
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
+        run: gradle --no-daemon --stacktrace -p "$PROJECT_DIR/android-wrapper" clean assembleDebug
       - name: Verify APK
-        run: |
-          test -s "$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-
-      - name: Calculate APK checksum
-        run: |
-          sha256sum "$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
+        run: test -s "$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-Stage37-100K-Android-APK
-          path: ${{ env.PROJECT_DIR }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.extract.outputs.project_dir }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
-          
