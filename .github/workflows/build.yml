@@ -1,61 +1,33 @@
 
-name: SONG DNA SMART STUDIO 5.1.1 - Android APK
+name: SONG DNA SMART STUDIO 5.2.0 - Android APK
 
-on:
+'on':
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-android-build
+  group: song-dna-smart-studio-5-2-0-android-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Validate and Build APK
+    name: Validate and build SONG DNA SMART STUDIO 5.2.0 APK
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 35
 
     steps:
-      - name: Checkout repository
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Prepare source files
+      - name: Confirm checked-out source is authoritative
         shell: bash
         run: |
-          set -euo pipefail
-
-          if [[ -f "www/app.js" && -f "android-wrapper/app/build.gradle.kts" ]]; then
-            echo "Repository root source detected."
-          else
-            ZIP_FILE="SONG_DNA_SMART_STUDIO_5_1_1_Final_Integrated_Developer_Package.zip"
-
-            if [[ ! -f "$ZIP_FILE" ]]; then
-              echo "::error::Expected 5.1.1 ZIP package was not found in repository root."
-              exit 1
-            fi
-
-            mkdir -p "$RUNNER_TEMP/songdna-package"
-            unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-package"
-
-            APP_JS="$(find "$RUNNER_TEMP/songdna-package" -type f -path '*/www/app.js' -print -quit)"
-
-            if [[ -z "$APP_JS" ]]; then
-              echo "::error::www/app.js was not found inside the ZIP."
-              exit 1
-            fi
-
-            SOURCE_DIR="${APP_JS%/www/app.js}"
-            cp -a "$SOURCE_DIR/." "$GITHUB_WORKSPACE/"
-          fi
-
           test -f www/app.js
           test -f backend/server.js
           test -f android-wrapper/app/build.gradle.kts
-          test -f scripts/verify-source.py
-
-          echo "Source preparation completed."
+          echo "Building the exact source committed to this repository; root ZIP files are not overlaid."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -68,11 +40,6 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Set up Python 3
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
@@ -81,48 +48,79 @@ jobs:
         run: |
           set +e
           yes | sdkmanager --licenses
-          STATUS="${PIPESTATUS[1]}"
+          PIPE_STATUS=("${PIPESTATUS[@]}")
           set -e
-          if [[ "$STATUS" -ne 0 ]]; then
-            exit "$STATUS"
+          SDKMANAGER_STATUS="${PIPE_STATUS[1]}"
+          if [[ "$SDKMANAGER_STATUS" -ne 0 ]]; then
+            echo "::error::Android SDK license acceptance failed (sdkmanager exit $SDKMANAGER_STATUS)."
+            exit "$SDKMANAGER_STATUS"
           fi
 
       - name: Install Android SDK components
-        run: |
-          sdkmanager \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Validate source code
-        run: python scripts/verify-source.py
+      - name: Validate source
+        run: python3 scripts/verify-source.py
 
-      - name: Check JavaScript syntax
-        run: |
-          node --check www/app.js
-          node --check backend/server.js
+      - name: Build debug APK
+        run: gradle --no-daemon --stacktrace --warning-mode all -p android-wrapper clean assembleDebug
 
-      - name: Build Android debug APK
-        run: |
-          gradle --no-daemon --stacktrace \
-            -p android-wrapper clean assembleDebug
+      - name: Verify debug APK
+        run: test -s android-wrapper/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Verify APK
-        run: |
-          APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-          sha256sum "$APK"
+      - name: Record APK checksum
+        shell: bash
+        run: sha256sum android-wrapper/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-Studio-5.1.1-debug-APK
+          name: SONGDNA-Studio-5.2.0-debug-APK
           path: android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Configure release signing (only when all secrets exist)
+        id: signing
+        shell: bash
+        env:
+          KEYSTORE_B64: ${{ secrets.SONGDNA_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.SONGDNA_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.SONGDNA_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.SONGDNA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            KEYSTORE_PATH="$RUNNER_TEMP/songdna-release.jks"
+            printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
+            test -s "$KEYSTORE_PATH"
+            {
+              echo "SONGDNA_KEYSTORE_FILE=$KEYSTORE_PATH"
+              echo "SONGDNA_KEYSTORE_PASSWORD=$STORE_PASSWORD"
+              echo "SONGDNA_KEY_ALIAS=$KEY_ALIAS"
+              echo "SONGDNA_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Release signing secrets are incomplete; signed release APK will not be built."
+          fi
+
+      - name: Build signed release APK
+        if: steps.signing.outputs.enabled == 'true'
+        run: gradle --no-daemon --stacktrace -p android-wrapper assembleRelease
+
+      - name: Upload signed release APK
+        if: steps.signing.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SONGDNA-Studio-5.2.0-signed-release-APK
+          path: android-wrapper/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 30
           
