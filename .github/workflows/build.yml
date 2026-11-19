@@ -54,7 +54,7 @@ jobs:
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.9'
+          gradle-version: "8.9"
 
       - name: Verify Stage 60 project files
         run: |
@@ -81,14 +81,6 @@ jobs:
         run: |
           diff -qr www android-wrapper/app/src/main/assets/www
 
-      - name: Prepare optional release signing
-        if: ${{ secrets.SONGDNA_KEYSTORE_BASE64 != '' }}
-        env:
-          KEYSTORE_BASE64: ${{ secrets.SONGDNA_KEYSTORE_BASE64 }}
-        run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/songdna-release.keystore"
-          echo "SONGDNA_KEYSTORE_FILE=$RUNNER_TEMP/songdna-release.keystore" >> "$GITHUB_ENV"
-
       - name: Build debug APK
         working-directory: stage58_work/android-wrapper
         run: |
@@ -100,16 +92,6 @@ jobs:
           test -f android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           ls -lh android-wrapper/app/build/outputs/apk/debug/app-debug.apk
 
-      - name: Build signed release APK
-        if: ${{ secrets.SONGDNA_KEYSTORE_BASE64 != '' }}
-        working-directory: stage58_work/android-wrapper
-        env:
-          SONGDNA_KEYSTORE_PASSWORD: ${{ secrets.SONGDNA_KEYSTORE_PASSWORD }}
-          SONGDNA_KEY_ALIAS: ${{ secrets.SONGDNA_KEY_ALIAS }}
-          SONGDNA_KEY_PASSWORD: ${{ secrets.SONGDNA_KEY_PASSWORD }}
-        run: |
-          gradle assembleRelease
-
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -117,16 +99,4 @@ jobs:
           path: stage58_work/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
-
-      - name: Upload release APK
-        if: ${{ secrets.SONGDNA_KEYSTORE_BASE64 != '' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: SONGDNA-Studio-5.2.0-Stage60-release-APK
-          path: stage58_work/android-wrapper/app/build/outputs/apk/release/app-release.apk
-          if-no-files-found: error
-          retention-days: 14
-
-      # Compatibility token for the existing source verification script:
-      # SONGDNA-Studio-5.2.0-Stage47-debug-APK
-      
+          
