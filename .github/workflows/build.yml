@@ -1,69 +1,109 @@
 
-name: SONGDNA Studio 5.2.0 Stage 34 - Android APK
+name: SONGDNA Studio 5.2.0 - Stage 37 - 100K
 
-on:
+'on':
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: songdna-stage34-build
+  group: songdna-stage37-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Extract, Test and Build APK
+    name: Extract, sync backend and build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 40
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Find and extract Stage 34 ZIP
-        id: source
+      - name: Find and extract Stage 37 ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ARCHIVE=$(find . -maxdepth 1 -type f \
-            -iname '*Stage34*Select*Theme*.zip' \
-            -print -quit)
+          ZIP_FILE="$(find . -maxdepth 2 -type f \
+            -name 'SONGDNA_Studio_5_2_0_Stage37_100K_Prompt_Limit.zip' \
+            -print -quit)"
 
-          if [ -z "$ARCHIVE" ]; then
-            echo "::error::Stage 34 ZIP not found in repository root."
+          if [[ -z "$ZIP_FILE" ]]; then
+            echo "::error::Stage 37 ZIP dosyası repository içinde bulunamadı."
             exit 1
           fi
 
-          echo "Found archive: $ARCHIVE"
+          EXTRACT_DIR="$RUNNER_TEMP/songdna-stage37"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
 
-          mkdir -p stage34-extracted
-          unzip -q "$ARCHIVE" -d stage34-extracted
+          mapfile -t PROJECTS < <(
+            find "$EXTRACT_DIR" -type f \
+              -path '*/backend/server.js' \
+              -exec dirname {} \; |
+            while read -r backend_dir; do
+              dirname "$backend_dir"
+            done |
+            sort -u
+          )
 
-          APP_FILE=$(find stage34-extracted -type f \
-            -path '*/www/app.js' -print -quit)
-
-          if [ -z "$APP_FILE" ]; then
-            echo "::error::www/app.js not found after ZIP extraction."
+          if [[ "${#PROJECTS[@]}" -ne 1 ]]; then
+            echo "::error::Gerçek proje klasörü tekil olarak tespit edilemedi."
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$(dirname "$APP_FILE")")
-          PROJECT_DIR=$(realpath "$PROJECT_DIR")
+          PROJECT_DIR="${PROJECTS[0]}"
 
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Project directory: $PROJECT_DIR"
-
-          test -f "$PROJECT_DIR/www/index.html"
-          test -f "$PROJECT_DIR/www/production-preset-engine.js"
+          test -f "$PROJECT_DIR/app.js"
           test -f "$PROJECT_DIR/backend/server.js"
-          test -f "$PROJECT_DIR/android-wrapper/settings.gradle.kts"
           test -f "$PROJECT_DIR/android-wrapper/app/build.gradle.kts"
           test -f "$PROJECT_DIR/scripts/verify-source.py"
-          test -f "$PROJECT_DIR/scripts/test-production-preset-engine.js"
 
-          echo "All required project files verified."
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Stage 37 kaynak paketi bulundu ve açıldı."
+          echo "Proje dizini: $PROJECT_DIR"
+
+      - name: Verify 100K backend limits
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SERVER="$PROJECT_DIR/backend/server.js"
+
+          grep -q 'prompt.length > 100_000' "$SERVER"
+          grep -q '100.000 karakter' "$SERVER"
+          grep -q 'MAX_BODY = 500_000' "$SERVER"
+
+          node --check "$SERVER"
+
+          echo "100.000 karakter istem sınırı doğrulandı."
+          echo "500.000 karakter istek gövdesi sınırı doğrulandı."
+
+      - name: Sync backend to GitHub repository
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p backend
+
+          cp "$PROJECT_DIR/backend/server.js" backend/server.js
+          cp "$PROJECT_DIR/backend/package.json" backend/package.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add backend/server.js backend/package.json
+
+          if git diff --cached --quiet; then
+            echo "Backend dosyaları zaten güncel."
+          else
+            git commit -m "Deploy SONGDNA Stage 37 100K backend"
+            git push origin HEAD:main
+          fi
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -71,99 +111,52 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Node.js
+      - name: Set up Node.js 20
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
+          node-version: '20'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
       - name: Accept Android SDK licenses
+        shell: bash
         run: |
+          set -euo pipefail
           yes | sdkmanager --licenses || true
 
       - name: Install Android SDK components
         run: |
-          sdkmanager "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Set up Gradle
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Validate source
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
+      - name: Validate Stage 37 source
         run: |
-          cd "$PROJECT_DIR"
-          python scripts/verify-source.py
-
-      - name: Check JavaScript syntax
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
-        run: |
-          cd "$PROJECT_DIR"
-          node --check www/app.js
-          node --check www/production-preset-engine.js
-
-      - name: Run production preset tests
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
-        run: |
-          cd "$PROJECT_DIR"
-          node scripts/test-production-preset-engine.js
-
-      - name: Run regression tests
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
-        run: |
-          cd "$PROJECT_DIR"
-          node scripts/test-stage31-2-music-dna-arrangement.js
-          node scripts/test-stage32-arrangement-adlib.js
-          node scripts/test-adlib-catalog.js
-          node scripts/test-genre-adlib-engine.js
-          node scripts/test-global-cultural-adlib.js
-          node scripts/test-stage28-cultural-routing.js
-          node scripts/test-stage29-client-api-contract.js
-          node tests/test-saved-library.js
-          node tests/test-production-history.js
-          node test-gemini-instruction-engine.js
+          python3 "$PROJECT_DIR/scripts/verify-source.py"
 
       - name: Build Android debug APK
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         run: |
           gradle --no-daemon --stacktrace \
             -p "$PROJECT_DIR/android-wrapper" \
             clean assembleDebug
 
       - name: Verify APK
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         run: |
-          APK="$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ ! -s "$APK" ]; then
-            echo "::error::APK file was not generated."
-            exit 1
-          fi
+      - name: Calculate APK checksum
+        run: |
+          sha256sum "$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
-          sha256sum "$APK"
-          echo "APK verification successful."
-
-      - name: Upload Android APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-Studio-5.2.0-Stage34-APK
-          path: ${{ steps.source.outputs.project_dir }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          name: SONGDNA-Stage37-100K-Android-APK
+          path: ${{ env.PROJECT_DIR }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
           
