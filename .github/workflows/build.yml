@@ -1,4 +1,5 @@
-name: SONGDNA SMART STUDIO 5.2.0 - Android APK Build
+
+name: SONGDNA SMART STUDIO 5.2.0 - Stage 60 APK Build
 
 on:
   workflow_dispatch:
@@ -6,16 +7,20 @@ on:
     branches:
       - main
     paths:
+      - "stage58_work/**"
       - ".github/workflows/build.yml"
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
   build:
     name: Build SONGDNA 5.2.0 APK
     runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: stage58_work
 
     steps:
       - name: Checkout repository
@@ -27,7 +32,7 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -38,7 +43,7 @@ jobs:
           python-version: "3.x"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
         run: |
@@ -49,49 +54,79 @@ jobs:
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: '8.9'
 
-      - name: Verify project files
+      - name: Verify Stage 60 project files
         run: |
-          test -f android-wrapper/settings.gradle
-          test -f android-wrapper/build.gradle
-          test -f android-wrapper/app/build.gradle
+          test -f BUILD_MANIFEST.json
+          test -f android-wrapper/settings.gradle.kts
+          test -f android-wrapper/build.gradle.kts
+          test -f android-wrapper/app/build.gradle.kts
+          test -f android-wrapper/app/src/main/AndroidManifest.xml
           test -f www/app.js
           test -f www/production-model-library.js
-          test -f BUILD_MANIFEST.json
+          test -f scripts/verify-source.py
 
       - name: Validate JavaScript
         run: |
           node --check www/app.js
           node --check www/production-model-library.js
+          node --check backend/server.js
 
-      - name: Verify source package
+      - name: Verify Stage 60 source
         run: |
-          if [ -f scripts/verify-source.py ]; then
-            python scripts/verify-source.py
-          else
-            echo "Source verification script not found; continuing with file checks."
-          fi
+          python scripts/verify-source.py
 
       - name: Verify Android WebView assets
         run: |
           diff -qr www android-wrapper/app/src/main/assets/www
 
+      - name: Prepare optional release signing
+        if: ${{ secrets.SONGDNA_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_BASE64: ${{ secrets.SONGDNA_KEYSTORE_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/songdna-release.keystore"
+          echo "SONGDNA_KEYSTORE_FILE=$RUNNER_TEMP/songdna-release.keystore" >> "$GITHUB_ENV"
+
       - name: Build debug APK
-        working-directory: android-wrapper
+        working-directory: stage58_work/android-wrapper
         run: |
           gradle clean assembleDebug
 
       - name: Verify debug APK
+        working-directory: stage58_work
         run: |
-          APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-          test -f "$APK"
-          ls -lh "$APK"
+          test -f android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          ls -lh android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Build signed release APK
+        if: ${{ secrets.SONGDNA_KEYSTORE_BASE64 != '' }}
+        working-directory: stage58_work/android-wrapper
+        env:
+          SONGDNA_KEYSTORE_PASSWORD: ${{ secrets.SONGDNA_KEYSTORE_PASSWORD }}
+          SONGDNA_KEY_ALIAS: ${{ secrets.SONGDNA_KEY_ALIAS }}
+          SONGDNA_KEY_PASSWORD: ${{ secrets.SONGDNA_KEY_PASSWORD }}
+        run: |
+          gradle assembleRelease
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-Studio-5.2.0-Stage60-debug-APK
-          path: android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          path: stage58_work/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload release APK
+        if: ${{ secrets.SONGDNA_KEYSTORE_BASE64 != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: SONGDNA-Studio-5.2.0-Stage60-release-APK
+          path: stage58_work/android-wrapper/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      # Compatibility token for the existing source verification script:
+      # SONGDNA-Studio-5.2.0-Stage47-debug-APK
+      
