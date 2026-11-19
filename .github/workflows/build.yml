@@ -8,26 +8,62 @@ permissions:
   contents: read
 
 concurrency:
-  group: songdna-studio-android-build
+  group: songdna-stage34-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Validate and Build Android APK
+    name: Extract, Test and Build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
 
     steps:
-      - name: Checkout source
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify project files
+      - name: Find and extract Stage 34 ZIP
+        id: source
+        shell: bash
         run: |
-          test -f www/app.js
-          test -f www/index.html
-          test -f www/production-preset-engine.js
-          test -f android-wrapper/app/build.gradle.kts
-          test -f backend/server.js
+          set -euo pipefail
+
+          ARCHIVE=$(find . -maxdepth 1 -type f \
+            -iname '*Stage34*Select*Theme*.zip' \
+            -print -quit)
+
+          if [ -z "$ARCHIVE" ]; then
+            echo "::error::Stage 34 ZIP not found in repository root."
+            exit 1
+          fi
+
+          echo "Found archive: $ARCHIVE"
+
+          mkdir -p stage34-extracted
+          unzip -q "$ARCHIVE" -d stage34-extracted
+
+          APP_FILE=$(find stage34-extracted -type f \
+            -path '*/www/app.js' -print -quit)
+
+          if [ -z "$APP_FILE" ]; then
+            echo "::error::www/app.js not found after ZIP extraction."
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$(dirname "$APP_FILE")")
+          PROJECT_DIR=$(realpath "$PROJECT_DIR")
+
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+          echo "Project directory: $PROJECT_DIR"
+
+          test -f "$PROJECT_DIR/www/index.html"
+          test -f "$PROJECT_DIR/www/production-preset-engine.js"
+          test -f "$PROJECT_DIR/backend/server.js"
+          test -f "$PROJECT_DIR/android-wrapper/settings.gradle.kts"
+          test -f "$PROJECT_DIR/android-wrapper/app/build.gradle.kts"
+          test -f "$PROJECT_DIR/scripts/verify-source.py"
+          test -f "$PROJECT_DIR/scripts/test-production-preset-engine.js"
+
+          echo "All required project files verified."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -35,10 +71,10 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -49,38 +85,47 @@ jobs:
         uses: android-actions/setup-android@v4
 
       - name: Accept Android SDK licenses
-        shell: bash
         run: |
-          set +e
-          yes | sdkmanager --licenses
-          status=${PIPESTATUS[1]}
-          set -e
-          if [ "$status" -ne 0 ]; then
-            exit "$status"
-          fi
+          yes | sdkmanager --licenses || true
 
       - name: Install Android SDK components
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
       - name: Validate source
-        run: python scripts/verify-source.py
+        env:
+          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
+        run: |
+          cd "$PROJECT_DIR"
+          python scripts/verify-source.py
 
       - name: Check JavaScript syntax
+        env:
+          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         run: |
+          cd "$PROJECT_DIR"
           node --check www/app.js
           node --check www/production-preset-engine.js
 
       - name: Run production preset tests
-        run: node scripts/test-production-preset-engine.js
-
-      - name: Run existing regression tests
+        env:
+          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         run: |
+          cd "$PROJECT_DIR"
+          node scripts/test-production-preset-engine.js
+
+      - name: Run regression tests
+        env:
+          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
+        run: |
+          cd "$PROJECT_DIR"
           node scripts/test-stage31-2-music-dna-arrangement.js
           node scripts/test-stage32-arrangement-adlib.js
           node scripts/test-adlib-catalog.js
@@ -92,22 +137,33 @@ jobs:
           node tests/test-production-history.js
           node test-gemini-instruction-engine.js
 
-      - name: Build debug APK
+      - name: Build Android debug APK
+        env:
+          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         run: |
           gradle --no-daemon --stacktrace \
-            --warning-mode all \
-            -p android-wrapper clean assembleDebug
+            -p "$PROJECT_DIR/android-wrapper" \
+            clean assembleDebug
 
       - name: Verify APK
+        env:
+          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         run: |
-          test -s android-wrapper/app/build/outputs/apk/debug/app-debug.apk
-          sha256sum android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          APK="$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
-      - name: Upload debug APK
+          if [ ! -s "$APK" ]; then
+            echo "::error::APK file was not generated."
+            exit 1
+          fi
+
+          sha256sum "$APK"
+          echo "APK verification successful."
+
+      - name: Upload Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-Studio-5.2.0-Stage34-debug-APK
-          path: android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          name: SONGDNA-Studio-5.2.0-Stage34-APK
+          path: ${{ steps.source.outputs.project_dir }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
           
