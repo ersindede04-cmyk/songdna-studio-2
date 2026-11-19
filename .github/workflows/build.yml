@@ -1,72 +1,45 @@
-
 name: SONGDNA SMART STUDIO 5.2.0 - Stage 60.1 APK Build
 
 on:
   push:
     branches:
       - main
-    # Yalnızca kaynak ZIP yüklendiğinde derleme başlar.
-    # YAML güncellemesi ikinci bir derleme başlatmaz.
+    # Only the source ZIP triggers a build.
+    # Updating this workflow does not start another build.
     paths:
       - 'SONGDNA_Studio_5_2_0_Stage60_1_Production_Prompt_Hotfix.zip'
 
 permissions:
   contents: read
 
-# Aynı proje için derlemeler sıraya alınır, çalışan derleme iptal edilmez.
 concurrency:
   group: songdna-stage60-1-android-build
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Build SONGDNA 5.2.0 Stage 60.1 APK
+    name: Build verified Stage 60.1 APK
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 55
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract uploaded ZIP and verify source layout
+      - name: Extract the uploaded ZIP and select its source tree
         shell: bash
         run: |
           set -euo pipefail
           ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_5_2_0_Stage60_1_Production_Prompt_Hotfix.zip"
-          if [[ ! -s "$ZIP_FILE" ]]; then
-            echo '::error::Source ZIP not found in repository root. Check the exact ZIP filename.'
-            exit 1
-          fi
-
+          test -s "$ZIP_FILE" || { echo '::error::Expected Stage60.1 source ZIP was not found in repository root.'; exit 1; }
           DEST="$RUNNER_TEMP/songdna-stage60-1"
           mkdir -p "$DEST"
           unzip -q "$ZIP_FILE" -d "$DEST"
-
           SOURCE_ROOT="$DEST/stage58_work"
-          if [[ ! -d "$SOURCE_ROOT" ]]; then
-            echo '::error::Expected stage58_work directory was not found inside the ZIP.'
-            unzip -Z1 "$ZIP_FILE" | head -80
-            exit 1
-          fi
-
-          REQUIRED_FILES=(
-            "index.html"
-            "www/app.js"
-            "server.js"
-            "backend/server.js"
-            "backend/package.json"
-            "android-wrapper/app/build.gradle.kts"
-            "scripts/verify-source.py"
-          )
-          for file in "${REQUIRED_FILES[@]}"; do
-            if [[ ! -f "$SOURCE_ROOT/$file" ]]; then
-              echo "::error::Required file missing: stage58_work/$file"
-              exit 1
-            fi
-          done
-
+          test -d "$SOURCE_ROOT" || { echo '::error::stage58_work directory missing inside source ZIP.'; exit 1; }
+          test -f "$SOURCE_ROOT/BUILD_MANIFEST.json" || { echo '::error::Source manifest missing.'; exit 1; }
           echo "SOURCE_ROOT=$SOURCE_ROOT" >> "$GITHUB_ENV"
-          echo 'ZIP extraction and source layout verification completed.'
+          echo 'Stage60.1 source ZIP extracted. All following validation and build steps use this extracted source tree.'
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -85,9 +58,7 @@ jobs:
           python-version: '3.x'
 
       - name: Install Playwright test dependency
-        shell: bash
         run: |
-          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install playwright
           python -m playwright install --with-deps chromium
@@ -99,76 +70,87 @@ jobs:
           log-accepted-android-sdk-licenses: false
 
       - name: Install Android SDK packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
+        run: sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Validate source and run tests
+      - name: Verify Stage 60.1 manifest and synchronized Android assets
         shell: bash
         run: |
           set -euo pipefail
           cd "$SOURCE_ROOT"
-
           python3 scripts/verify-source.py
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('.')
+          paths=[
+            root/'BUILD_MANIFEST.json',
+            root/'www/BUILD_MANIFEST.json',
+            root/'android-wrapper/app/src/main/assets/BUILD_MANIFEST.json',
+            root/'android-wrapper/app/src/main/assets/www/BUILD_MANIFEST.json'
+          ]
+          manifests=[json.loads(p.read_text(encoding='utf-8')) for p in paths]
+          assert all(m==manifests[0] for m in manifests[1:]), 'Manifest copies are not identical'
+          assert manifests[0].get('stage')=='60.1', 'Wrong source stage: expected 60.1'
+          assert any(str(x).startswith('Stage 60.1:') for x in manifests[0].get('completed_stages',[])), 'Stage60.1 completion marker missing'
+          print('PASS: exact Stage 60.1 source manifest verified before APK build')
+          PY
+
+      - name: Run JavaScript and Python regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SOURCE_ROOT"
+          node --check app.js
           node --check www/app.js
-          node --check server.js
           node --check backend/server.js
           npm --prefix backend run check
-
           shopt -s nullglob
           JS_TESTS=(scripts/test-*.js tests/test-*.js test-gemini-instruction-engine.js)
           for test_file in "${JS_TESTS[@]}"; do
-            echo "Running JavaScript test: $test_file"
+            echo "Running $test_file"
             node "$test_file"
           done
-
           PY_TESTS=(scripts/test-*.py)
           for test_file in "${PY_TESTS[@]}"; do
-            echo "Running Python test: $test_file"
+            echo "Running $test_file"
             python3 "$test_file"
           done
 
-      - name: Build debug APK
+      - name: Build debug APK from the extracted Stage 60.1 source
         shell: bash
         run: |
           set -euo pipefail
           cd "$SOURCE_ROOT/android-wrapper"
           gradle --no-daemon --stacktrace --warning-mode all clean assembleDebug
 
-      - name: Verify APK and calculate SHA-256
+      - name: Verify APK and write checksum to run summary
         shell: bash
         run: |
           set -euo pipefail
           APK="$SOURCE_ROOT/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-          if [[ ! -s "$APK" ]]; then
-            echo '::error::APK output was not created.'
-            exit 1
-          fi
-
+          test -s "$APK" || { echo '::error::APK was not produced.'; exit 1; }
           SHA256="$(sha256sum "$APK" | awk '{print $1}')"
-          mkdir -p "$RUNNER_TEMP/songdna-apk-output"
-          cp "$APK" "$RUNNER_TEMP/songdna-apk-output/SONGDNA-Studio-5.2.0-Stage60.1-debug.apk"
-
+          mkdir -p "$RUNNER_TEMP/songdna-stage60-1-output"
+          cp "$APK" "$RUNNER_TEMP/songdna-stage60-1-output/SONGDNA-Studio-5.2.0-Stage60.1-debug.apk"
           {
-            echo '## SONGDNA Stage 60.1 APK'
+            echo '## SONGDNA SMART STUDIO 5.2.0 — Stage 60.1'
             echo ''
-            echo '- Build: successful'
-            echo '- Artifact: SONGDNA-Studio-5.2.0-Stage60.1-debug-APK'
-            echo '- APK file: SONGDNA-Studio-5.2.0-Stage60.1-debug.apk'
+            echo '- Source manifest: Stage 60.1 verified'
+            echo '- Web and Android assets: synchronized'
+            echo '- APK: SONGDNA-Studio-5.2.0-Stage60.1-debug.apk'
             echo "- SHA-256: \`$SHA256\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload one APK artifact
+      - name: Upload exactly one Stage 60.1 APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-Studio-5.2.0-Stage60.1-debug-APK
-          path: ${{ runner.temp }}/songdna-apk-output/SONGDNA-Studio-5.2.0-Stage60.1-debug.apk
+          path: ${{ runner.temp }}/songdna-stage60-1-output/SONGDNA-Studio-5.2.0-Stage60.1-debug.apk
           if-no-files-found: error
           retention-days: 14
           
