@@ -18,7 +18,7 @@ jobs:
   build:
     name: Extract source ZIP, verify, test and build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -76,7 +76,6 @@ jobs:
             backend/package.json \
             scripts/verify-source.py \
             android-wrapper/settings.gradle.kts \
-            android-wrapper/build.gradle.kts \
             android-wrapper/app/build.gradle.kts \
             android-wrapper/app/src/main/AndroidManifest.xml
           do
@@ -106,6 +105,14 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: Install Python browser test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
@@ -113,8 +120,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+          set +e
+          yes | sdkmanager --licenses
+          SDK_STATUS=${PIPESTATUS[1]}
+          set -e
+
+          if [[ "$SDK_STATUS" -ne 0 ]]; then
+            echo "::error::Android SDK lisans işlemi başarısız."
+            exit "$SDK_STATUS"
+          fi
+
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
