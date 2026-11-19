@@ -48,7 +48,8 @@ jobs:
           fi
 
           ZIP_FILE="${ZIP_FILES[0]}"
-          EXTRACT_DIR="$RUNNER_TEMP/songdna-source"
+          EXTRACT_DIR="$GITHUB_WORKSPACE/songdna-source"
+
           mkdir -p "$EXTRACT_DIR"
           unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
 
@@ -67,10 +68,15 @@ jobs:
           PROJECT_ROOT="${ROOTS[0]}"
 
           for required in \
-            index.html app.js www/index.html www/app.js \
-            backend/server.js backend/package.json \
+            index.html \
+            app.js \
+            www/index.html \
+            www/app.js \
+            backend/server.js \
+            backend/package.json \
             scripts/verify-source.py \
             android-wrapper/settings.gradle.kts \
+            android-wrapper/build.gradle.kts \
             android-wrapper/app/build.gradle.kts \
             android-wrapper/app/src/main/AndroidManifest.xml
           do
@@ -82,13 +88,13 @@ jobs:
 
           echo "project_root=$PROJECT_ROOT" >> "$GITHUB_OUTPUT"
           echo "Kaynak ZIP başarıyla açıldı."
+          echo "Proje kökü: $PROJECT_ROOT"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
@@ -145,12 +151,22 @@ jobs:
           done
 
           for file in \
-            index.html app.js saved-library.js production-history.js \
-            adlib-catalog.js global-cultural-adlib.js genre-adlib-engine.js \
-            production-preset-engine.js scene-jargon-catalog.js \
-            emotion-engine.js production-adaptation-engine.js energy-engine.js \
-            adlib-intelligence-engine.js atmosphere-engine.js \
-            section-arrangement-engine.js vocal-identity-engine.js
+            index.html \
+            app.js \
+            saved-library.js \
+            production-history.js \
+            adlib-catalog.js \
+            global-cultural-adlib.js \
+            genre-adlib-engine.js \
+            production-preset-engine.js \
+            scene-jargon-catalog.js \
+            emotion-engine.js \
+            production-adaptation-engine.js \
+            energy-engine.js \
+            adlib-intelligence-engine.js \
+            atmosphere-engine.js \
+            section-arrangement-engine.js \
+            vocal-identity-engine.js
           do
             for target in \
               "$file" \
@@ -177,7 +193,11 @@ jobs:
           set -euo pipefail
 
           APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
+
+          if [[ ! -s "$APK" ]]; then
+            echo "::error::APK dosyası oluşturulamadı."
+            exit 1
+          fi
 
           sha256sum "$APK" | tee \
             android-wrapper/app/build/outputs/apk/debug/app-debug.apk.sha256
@@ -205,6 +225,7 @@ jobs:
 
           if [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
             KEYSTORE_PATH="$RUNNER_TEMP/songdna-release.jks"
+
             printf '%s' "$KEYSTORE_B64" | base64 --decode > "$KEYSTORE_PATH"
             test -s "$KEYSTORE_PATH"
 
@@ -218,7 +239,7 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "İmzalama sırları tanımlı değil; yalnızca debug APK üretilecek."
+            echo "İmzalama sırları bulunamadı. Debug APK üretilecek."
           fi
 
       - name: Build signed release APK
