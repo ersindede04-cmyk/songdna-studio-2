@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build SONGDNA Stage 60.1 APK
+    name: Build Verified SONGDNA Stage 60.1 APK
     runs-on: ubuntu-latest
     timeout-minutes: 55
 
@@ -27,7 +27,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Extract uploaded Stage 60.1 v2 ZIP
+      - name: Extract Stage 60.1 v2 source ZIP
         shell: bash
         run: |
           set -euo pipefail
@@ -35,7 +35,7 @@ jobs:
           ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_5_2_0_Stage60_1_Production_Prompt_Hotfix_v2.zip"
 
           if [[ ! -s "$ZIP_FILE" ]]; then
-            echo "::error::Stage60.1 v2 ZIP file not found in repository root."
+            echo "::error::Stage60.1 v2 ZIP not found."
             exit 1
           fi
 
@@ -47,14 +47,13 @@ jobs:
           SOURCE_ROOT="$DEST/stage58_work"
 
           if [[ ! -d "$SOURCE_ROOT" ]]; then
-            echo "::error::stage58_work directory not found inside ZIP."
-            echo "ZIP contents:"
+            echo "::error::Expected stage58_work directory missing."
             unzip -Z1 "$ZIP_FILE" | head -80
             exit 1
           fi
 
           if [[ ! -f "$SOURCE_ROOT/scripts/verify-source.py" ]]; then
-            echo "::error::Source verification script missing."
+            echo "::error::Stage60.1 verification script missing."
             exit 1
           fi
 
@@ -65,7 +64,7 @@ jobs:
 
           echo "SOURCE_ROOT=$SOURCE_ROOT" >> "$GITHUB_ENV"
 
-          echo "Stage60.1 v2 source extracted successfully."
+          echo "Stage60.1 v2 ZIP extracted successfully."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -83,7 +82,7 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install Playwright
+      - name: Install Playwright dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -113,7 +112,7 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Verify Stage 60.1 source
+      - name: Verify Stage 60.1 source and runtime synchronization
         shell: bash
         run: |
           set -euo pipefail
@@ -122,7 +121,7 @@ jobs:
 
           python3 scripts/verify-source.py
 
-      - name: Verify synchronized build manifests
+      - name: Verify all four manifests and exact Stage 60.1 identity
         shell: bash
         run: |
           set -euo pipefail
@@ -140,19 +139,76 @@ jobs:
               Path("android-wrapper/app/src/main/assets/www/BUILD_MANIFEST.json")
           ]
 
+          manifests = []
+
           for path in paths:
               if not path.is_file():
-                  raise SystemExit(f"Missing manifest: {path}")
+                  raise SystemExit(f"FAIL: Missing manifest: {path}")
 
-          manifests = [
-              json.loads(path.read_text(encoding="utf-8"))
-              for path in paths
+              manifests.append(
+                  json.loads(path.read_text(encoding="utf-8"))
+              )
+
+          first = manifests[0]
+
+          if not all(item == first for item in manifests[1:]):
+              raise SystemExit("FAIL: Manifest copies are not identical.")
+
+          if first.get("version") != "5.2.0":
+              raise SystemExit("FAIL: Expected application version 5.2.0.")
+
+          if first.get("stage") != "60.1":
+              raise SystemExit("FAIL: Expected exact Stage 60.1 source.")
+
+          completed = first.get("completed_stages", [])
+
+          if not any(
+              str(item).startswith("Stage 60.1:")
+              for item in completed
+          ):
+              raise SystemExit("FAIL: Stage 60.1 completion marker missing.")
+
+          print("PASS: Four manifests are identical.")
+          print("PASS: Application version is 5.2.0.")
+          print("PASS: Exact source stage is 60.1.")
+          PY
+
+      - name: Verify Gemini prompt hotfix markers
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$SOURCE_ROOT"
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          files = [
+              Path("app.js"),
+              Path("www/app.js"),
+              Path("android-wrapper/app/src/main/assets/app.js"),
+              Path("android-wrapper/app/src/main/assets/www/app.js")
           ]
 
-          if not all(item == manifests[0] for item in manifests[1:]):
-              raise SystemExit("BUILD_MANIFEST.json copies do not match.")
+          for path in files:
+              if not path.is_file():
+                  raise SystemExit(f"FAIL: Missing runtime file: {path}")
 
-          print("PASS: All four build manifests are identical.")
+              source = path.read_text(encoding="utf-8")
+
+              required = [
+                  "SONGDNA_GEMINI_INSTRUCTIONS_2",
+                  "profileSnapshot:c.profileSnapshot?{version:c.profileSnapshot.version,id:c.profileSnapshot.id}:null",
+                  "Üretim istemi "
+              ]
+
+              for marker in required:
+                  if marker not in source:
+                      raise SystemExit(
+                          f"FAIL: Missing Stage 60.1 marker in {path}: {marker}"
+                      )
+
+          print("PASS: Gemini prompt hotfix markers found in all four app.js copies.")
           PY
 
       - name: Check JavaScript syntax
@@ -164,9 +220,11 @@ jobs:
 
           node --check app.js
           node --check www/app.js
+          node --check android-wrapper/app/src/main/assets/app.js
+          node --check android-wrapper/app/src/main/assets/www/app.js
           node --check backend/server.js
 
-          echo "JavaScript syntax checks passed."
+          echo "PASS: JavaScript syntax checks."
 
       - name: Run backend checks
         shell: bash
@@ -175,13 +233,9 @@ jobs:
 
           cd "$SOURCE_ROOT"
 
-          if node -e "process.exit(require('./backend/package.json').scripts?.check ? 0 : 1)"; then
-            npm --prefix backend run check
-          else
-            echo "No backend check script declared; syntax checks already completed."
-          fi
+          npm --prefix backend run check
 
-      - name: Run available regression tests
+      - name: Run JavaScript regression tests
         shell: bash
         run: |
           set -euo pipefail
@@ -203,7 +257,19 @@ jobs:
             fi
           done
 
-          PY_TESTS=(scripts/test-*.py)
+      - name: Run Python regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$SOURCE_ROOT"
+
+          shopt -s nullglob
+
+          PY_TESTS=(
+            scripts/test-*.py
+            tests/test-*.py
+          )
 
           for test_file in "${PY_TESTS[@]}"; do
             if [[ -f "$test_file" ]]; then
@@ -233,7 +299,7 @@ jobs:
           APK="$SOURCE_ROOT/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
           if [[ ! -s "$APK" ]]; then
-            echo "::error::APK file was not generated."
+            echo "::error::APK was not generated."
             exit 1
           fi
 
@@ -250,16 +316,20 @@ jobs:
           {
             echo "## SONGDNA SMART STUDIO 5.2.0 - Stage 60.1"
             echo ""
-            echo "- Source ZIP: Stage60.1 v2"
-            echo "- Source verification: passed"
-            echo "- Manifest synchronization: passed"
+            echo "- Source: Stage60.1 v2 ZIP"
+            echo "- Exact stage verification: passed"
+            echo "- Four manifest synchronization: passed"
+            echo "- Gemini prompt hotfix markers: passed"
             echo "- JavaScript syntax: passed"
-            echo "- Android build: passed"
+            echo "- Regression tests: passed"
+            echo "- Android APK build: passed"
             echo "- APK: $FINAL_APK"
             echo "- SHA256: \`$SHA256\`"
+            echo ""
+            echo "Live Gemini and physical device tests are still pending."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload exactly one APK artifact
+      - name: Upload exactly one Stage 60.1 APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-Studio-5.2.0-Stage60.1-debug-APK
