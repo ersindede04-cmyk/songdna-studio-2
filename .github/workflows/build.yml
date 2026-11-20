@@ -1,180 +1,25 @@
-name: SONGDNA SMART STUDIO 5.2.0 - Stage 78 - Gemini Production Verification
+          mapfile -t ZIP_CANDIDATES < <(
+            find "$GITHUB_WORKSPACE" -maxdepth 1 -type f \
+              -name 'SONGDNA_Studio_5_2_0_Stage77_150K_Prompt_Limit*.zip' \
+              -print | sort
+          )
 
-on:
-  workflow_dispatch:
-  push:
-    paths:
-      - 'SONGDNA_Studio_5_2_0_Stage77_150K_Prompt_Limit.zip'
-      - '.github/workflows/build.yml'
-
-permissions:
-  contents: read
-
-concurrency:
-  group: songdna-stage78-android-build
-  cancel-in-progress: false
-
-jobs:
-  build:
-    name: Extract ZIP, verify source, test and build APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Locate and extract Stage 77 ZIP
-        id: extract
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_Studio_5_2_0_Stage77_150K_Prompt_Limit.zip"
-          EXTRACT_DIR="$RUNNER_TEMP/songdna-stage78-source"
-
-          echo "Repository root:"
-          ls -la "$GITHUB_WORKSPACE"
-
-          if [ ! -f "$ZIP_FILE" ]; then
+          if [[ "${#ZIP_CANDIDATES[@]}" -eq 0 ]]; then
             echo "::error::Stage 77 ZIP not found in repository root."
             exit 1
           fi
 
-          unzip -t "$ZIP_FILE"
+          if [[ "${#ZIP_CANDIDATES[@]}" -gt 1 ]]; then
+            echo "::error::Multiple Stage 77 ZIP files found. Keep only one."
+            printf '%s\n' "${ZIP_CANDIDATES[@]}"
+            exit 1
+          fi
+
+          ZIP_FILE="${ZIP_CANDIDATES[0]}"
+          EXTRACT_DIR="$RUNNER_TEMP/songdna-stage78-source"
+
           mkdir -p "$EXTRACT_DIR"
+          unzip -t "$ZIP_FILE"
           unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
 
-          mapfile -t ROOTS < <(
-            find "$EXTRACT_DIR" -type f -path '*/backend/server.js'               -exec sh -c 'dirname "$(dirname "$1")"' _ {} \; | sort -u
-          )
-
-          if [ "${#ROOTS[@]}" -ne 1 ]; then
-            echo "::error::Could not identify exactly one project root."
-            printf '%s\n' "${ROOTS[@]:-none}"
-            exit 1
-          fi
-
-          PROJECT_DIR="${ROOTS[0]}"
-
-          for required in             app.js             www/app.js             backend/server.js             backend/package.json             scripts/verify-source.py             android-wrapper/gradlew             android-wrapper/app/build.gradle.kts
-          do
-            if [ ! -f "$PROJECT_DIR/$required" ]; then
-              echo "::error::Missing required file: $required"
-              exit 1
-            fi
-          done
-
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Project root: $PROJECT_DIR"
-
-      - name: Set up Java
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install backend dependencies
-        env:
-          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
-        run: |
-          cd "$PROJECT_DIR/backend"
-          npm ci
-
-      - name: Verify source and syntax
-        env:
-          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          python scripts/verify-source.py
-
-          node --check app.js
-          node --check www/app.js
-          node --check backend/server.js
-
-          if [ -f android-wrapper/app/src/main/assets/app.js ]; then
-            node --check android-wrapper/app/src/main/assets/app.js
-          fi
-
-          if [ -f android-wrapper/app/src/main/assets/www/app.js ]; then
-            node --check android-wrapper/app/src/main/assets/www/app.js
-          fi
-
-      - name: Run backend checks
-        env:
-          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
-        run: |
-          cd "$PROJECT_DIR/backend"
-          npm run check --if-present
-
-      - name: Run JavaScript regression tests
-        env:
-          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          mapfile -t TESTS < <(
-            find scripts tests -type f -name 'test-*.js' 2>/dev/null | sort
-          )
-
-          if [ "${#TESTS[@]}" -eq 0 ]; then
-            echo "::error::No JavaScript regression tests found."
-            exit 1
-          fi
-
-          for test_file in "${TESTS[@]}"; do
-            echo "Running: $test_file"
-            node "$test_file"
-          done
-
-      - name: Run Python regression tests
-        env:
-          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          mapfile -t TESTS < <(
-            find scripts tests -type f -name 'test_*.py' 2>/dev/null | sort
-          )
-
-          for test_file in "${TESTS[@]}"; do
-            echo "Running: $test_file"
-            python "$test_file"
-          done
-
-      - name: Build Android debug APK
-        env:
-          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR/android-wrapper"
-
-          chmod +x gradlew
-          ./gradlew --no-daemon clean assembleDebug
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: SONGDNA-Stage78-Android-Debug-APK
-          path: ${{ steps.extract.outputs.project_dir }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
-          
+          echo "Extracted archive: $ZIP_FILE"
