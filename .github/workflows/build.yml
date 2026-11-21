@@ -5,8 +5,6 @@ on:
   push:
     branches:
       - main
-    paths:
-      - '**'
   workflow_dispatch:
 
 permissions:
@@ -26,7 +24,7 @@ jobs:
       - name: Checkout GitHub repository
         uses: actions/checkout@v4
 
-      - name: Find and extract SONGDNA 6.1.0 Stage151 ZIP
+      - name: Find and extract SONGDNA Stage151 ZIP
         id: source
         shell: bash
         run: |
@@ -36,7 +34,7 @@ jobs:
             ! -path './.git/*' | grep -i 'stage151' | head -n 1 || true)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Stage151 source ZIP not found."
+            echo "ERROR: Stage151 ZIP not found."
             exit 1
           fi
 
@@ -44,8 +42,6 @@ jobs:
           unzip -q "$ZIP_FILE" -d _source
 
           echo "Source ZIP: $ZIP_FILE"
-          echo "Source extracted successfully."
-
           echo "source_dir=_source" >> "$GITHUB_OUTPUT"
 
       - name: Set up Java 17
@@ -64,7 +60,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Python test dependencies
+      - name: Install Python dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -84,7 +80,6 @@ jobs:
             -not -path '*/node_modules/*' -print0 |
           while IFS= read -r -d '' FILE; do
             DIR=$(dirname "$FILE")
-            echo "Installing dependencies in $DIR"
             cd "$GITHUB_WORKSPACE/$DIR"
 
             if [ -f package-lock.json ]; then
@@ -95,14 +90,19 @@ jobs:
           done
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+          accept-android-sdk-licenses: 'yes'
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-          yes | sdkmanager --licenses || true
+
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -120,14 +120,13 @@ jobs:
               -type f -print -quit)
 
             if [ -z "$GRADLE_FILE" ]; then
-              echo "ERROR: Android Gradle wrapper not found."
+              echo "ERROR: Gradle wrapper not found."
               exit 1
             fi
 
             ANDROID_DIR=$(dirname "$GRADLE_FILE")
           fi
 
-          echo "Android project: $ANDROID_DIR"
           echo "android_dir=$ANDROID_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Verify extracted source
@@ -135,7 +134,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          test -d _source
           test -f "${{ steps.android.outputs.android_dir }}/gradlew"
 
           if [ -f _source/scripts/verify-source.py ]; then
@@ -150,7 +148,6 @@ jobs:
           find _source -name '*.js' \
             -not -path '*/node_modules/*' -print0 |
           while IFS= read -r -d '' FILE; do
-            echo "Checking: $FILE"
             node --check "$FILE"
           done
 
@@ -187,7 +184,6 @@ jobs:
           ./gradlew --no-daemon clean assembleDebug
 
       - name: Verify APK and calculate SHA256
-        id: apk
         shell: bash
         run: |
           set -euo pipefail
@@ -197,20 +193,19 @@ jobs:
             -name '*debug*.apk' -print -quit)
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Debug APK not generated."
+            echo "ERROR: APK not generated."
             exit 1
           fi
 
           mkdir -p release
-          cp "$APK" release/SONGDNA-6.1.0-Stage151-debug.apk
+
+          cp "$APK" \
+            release/SONGDNA-6.1.0-Stage151-debug.apk
 
           sha256sum release/SONGDNA-6.1.0-Stage151-debug.apk \
-            | tee release/SHA256SUMS.txt
+            > release/SHA256SUMS.txt
 
-          echo "apk_path=release/SONGDNA-6.1.0-Stage151-debug.apk" \
-            >> "$GITHUB_OUTPUT"
-
-      - name: Upload SONGDNA 6.1.0 debug APK
+      - name: Upload SONGDNA APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-6.1.0-Stage151-Android-APK
@@ -229,17 +224,16 @@ jobs:
             echo ""
             echo "## Stage151 Android Build"
             echo ""
-            echo "- Source ZIP: Stage151"
-            echo "- Build type: Android Debug APK"
             echo "- Java: 17"
             echo "- Node.js: 22"
             echo "- Python: 3.11"
             echo "- Android SDK: 35"
+            echo "- Build Tools: 35.0.0"
             echo ""
             if [ -f release/SONGDNA-6.1.0-Stage151-debug.apk ]; then
               echo "APK generated successfully."
             else
-              echo "APK was not generated. Check the failed workflow step."
+              echo "APK was not generated. Check failed workflow step."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           
