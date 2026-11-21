@@ -1,160 +1,171 @@
 name: SONGDNA SMART STUDIO 6.1.0 - STAGE161
 
 on:
-workflow_dispatch:
-push:
-paths:
-- '**/*STAGE161_SOURCE.zip'
+  workflow_dispatch:
+  push:
+    paths:
+      - '**/SONGDNA_SMART_STUDIO_6_1_0_STAGE161_SOURCE.zip'
 
 permissions:
-contents: read
+  contents: read
 
 jobs:
-build:
-runs-on: ubuntu-24.04
+  build:
+    runs-on: ubuntu-24.04
 
-steps:
-  - name: Kaynak kodunu al
-    uses: actions/checkout@v4
+    steps:
+      - name: Kaynak kodunu al
+        uses: actions/checkout@v4
 
-  - name: Stage161 ZIP dosyasını bul
-    id: source
-    shell: bash
-    run: |
-      ZIP_FILE="$(find . -maxdepth 1 -type f -name '*STAGE161_SOURCE.zip' -print -quit)"
+      - name: Stage161 ZIP dosyasini bul
+        id: source
+        shell: bash
+        run: |
+          ZIP_FILE="$(find . -type f \
+            -name 'SONGDNA_SMART_STUDIO_6_1_0_STAGE161_SOURCE.zip' \
+            -not -path './.git/*' \
+            -print -quit)"
 
-      if [ -z "$ZIP_FILE" ]; then
-        echo "Stage161 kaynak ZIP dosyası bulunamadı."
-        exit 1
-      fi
+          if [ -z "$ZIP_FILE" ]; then
+            echo "Stage161 kaynak ZIP dosyasi bulunamadi."
+            exit 1
+          fi
 
-      echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-      echo "Kaynak paketi: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+          echo "Bulunan kaynak: $ZIP_FILE"
 
-  - name: Stage161 kaynak paketini aç
-    run: |
-      mkdir -p stage161
-      unzip -q "$ZIP_FILE" -d stage161
+      - name: Stage161 kaynak paketini ac
+        shell: bash
+        run: |
+          mkdir -p stage161
+          unzip -q "$ZIP_FILE" -d stage161
 
-      if [ ! -d "stage161/songdna95" ]; then
-        echo "songdna95 kaynak klasörü bulunamadı."
-        exit 1
-      fi
+          if [ ! -d "stage161/songdna95" ]; then
+            echo "stage161/songdna95 kaynak klasoru bulunamadi."
+            echo "ZIP icerigi:"
+            find stage161 -maxdepth 3 -type d
+            exit 1
+          fi
 
-  - name: Java 17 kur
-    uses: actions/setup-java@v4
-    with:
-      distribution: temurin
-      java-version: '17'
+      - name: Java 17 kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
 
-  - name: Node.js 22 kur
-    uses: actions/setup-node@v4
-    with:
-      node-version: '22'
+      - name: Node.js 22 kur
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
-  - name: Python 3.11 kur
-    uses: actions/setup-python@v5
-    with:
-      python-version: '3.11'
+      - name: Python 3.11 kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-  - name: Python test bağımlılıklarını kur
-    working-directory: stage161/songdna95
-    run: |
-      python -m pip install --upgrade pip
-      python -m pip install -r requirements-test.txt
+      - name: Python test bagimliliklarini kur
+        working-directory: stage161/songdna95
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
 
-  - name: Playwright Chromium kur
-    working-directory: stage161/songdna95
-    run: |
-      python -m playwright install --with-deps chromium
+      - name: Playwright Chromium kur
+        working-directory: stage161/songdna95
+        run: |
+          python -m playwright install --with-deps chromium
 
-  - name: Kaynak paketi doğrula
-    working-directory: stage161/songdna95
-    run: |
-      python scripts/verify-source.py
+      - name: Kaynak paketini dogrula
+        working-directory: stage161/songdna95
+        run: |
+          python scripts/verify-source.py
 
-  - name: Python CI ön kontrolü
-    working-directory: stage161/songdna95
-    run: |
-      python scripts/ci-preflight.py
+      - name: Python CI on kontrolu
+        working-directory: stage161/songdna95
+        run: |
+          python scripts/ci-preflight.py
 
-  - name: JavaScript testlerini çalıştır
-    working-directory: stage161/songdna95
-    shell: bash
-    run: |
-      mapfile -t JS_TESTS < <(
-        find tests scripts -maxdepth 1 -type f -name 'test-*.js' -print | sort
-      )
+      - name: JavaScript testlerini calistir
+        working-directory: stage161/songdna95
+        shell: bash
+        run: |
+          mapfile -t JS_TESTS < <(
+            find tests scripts -maxdepth 1 \
+              -type f -name 'test-*.js' -print | sort
+          )
 
-      JS_TESTS+=(test-gemini-instruction-engine.js)
+          JS_TESTS+=(test-gemini-instruction-engine.js)
 
-      echo "Bulunan JavaScript test sayısı: ${#JS_TESTS[@]}"
+          echo "JavaScript test sayisi: ${#JS_TESTS[@]}"
 
-      if [ "${#JS_TESTS[@]}" -ne 123 ]; then
-        echo "Beklenen JavaScript test sayısı 123."
-        exit 1
-      fi
+          if [ "${#JS_TESTS[@]}" -ne 123 ]; then
+            echo "Beklenen JavaScript test sayisi 123."
+            exit 1
+          fi
 
-      for TEST in "${JS_TESTS[@]}"; do
-        echo "Test: $TEST"
-        node "$TEST"
-      done
+          for TEST in "${JS_TESTS[@]}"; do
+            echo "Calistiriliyor: $TEST"
+            node "$TEST"
+          done
 
-  - name: Python testlerini çalıştır
-    working-directory: stage161/songdna95
-    shell: bash
-    run: |
-      mapfile -t PY_TESTS < <(
-        find scripts -maxdepth 1 -type f -name 'test-*.py' -print | sort
-      )
+      - name: Python testlerini calistir
+        working-directory: stage161/songdna95
+        shell: bash
+        run: |
+          mapfile -t PY_TESTS < <(
+            find scripts -maxdepth 1 \
+              -type f -name 'test-*.py' -print | sort
+          )
 
-      echo "Bulunan Python test sayısı: ${#PY_TESTS[@]}"
+          echo "Python test sayisi: ${#PY_TESTS[@]}"
 
-      if [ "${#PY_TESTS[@]}" -ne 5 ]; then
-        echo "Beklenen Python test sayısı 5."
-        exit 1
-      fi
+          if [ "${#PY_TESTS[@]}" -ne 5 ]; then
+            echo "Beklenen Python test sayisi 5."
+            exit 1
+          fi
 
-      for TEST in "${PY_TESTS[@]}"; do
-        echo "Test: $TEST"
-        python "$TEST"
-      done
+          for TEST in "${PY_TESTS[@]}"; do
+            echo "Calistiriliyor: $TEST"
+            python "$TEST"
+          done
 
-  - name: Android SDK kur
-    uses: android-actions/setup-android@v4
+      - name: Android SDK kur
+        uses: android-actions/setup-android@v4
 
-  - name: Android SDK bileşenlerini kur
-    run: |
-      sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-      yes | sdkmanager --licenses
+      - name: Android SDK bilesenlerini kur
+        run: |
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses
 
-  - name: Gradle 8.9 kur
-    uses: gradle/actions/setup-gradle@v4
-    with:
-      gradle-version: '8.9'
+      - name: Gradle 8.9 kur
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
 
-  - name: Android APK derle
-    working-directory: stage161/songdna95
-    run: |
-      gradle --no-daemon --stacktrace \
-        -p android-wrapper \
-        clean assembleDebug
+      - name: Android APK derle
+        working-directory: stage161/songdna95
+        run: |
+          gradle --no-daemon --stacktrace \
+            -p android-wrapper \
+            clean assembleDebug
 
-  - name: APK dosyasını doğrula
-    working-directory: stage161/songdna95
-    run: |
-      APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+      - name: APK dosyasini dogrula
+        working-directory: stage161/songdna95
+        shell: bash
+        run: |
+          APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
-      if [ ! -f "$APK" ]; then
-        echo "APK oluşturulamadı."
-        exit 1
-      fi
+          if [ ! -f "$APK" ]; then
+            echo "APK olusturulamadi."
+            exit 1
+          fi
 
-      ls -lh "$APK"
+          echo "APK basariyla olusturuldu:"
+          ls -lh "$APK"
 
-  - name: APK dosyasını yükle
-    uses: actions/upload-artifact@v4
-    with:
-      name: SONGDNA-SMART-STUDIO-6.1.0-STAGE161-APK
-      path: stage161/songdna95/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
-      retention-days: 14
+      - name: APK dosyasini yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: SONGDNA-SMART-STUDIO-6.1.0-STAGE161-APK
+          path: stage161/songdna95/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
