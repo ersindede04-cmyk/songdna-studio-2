@@ -1,192 +1,66 @@
 
-name: SONGDNA SMART STUDIO 6.1.0 - Automatic ZIP APK Build
-
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths:
-      - '**.zip'
-      - '.github/workflows/build.yml'
-
-permissions:
-  contents: read
-
-concurrency:
-  group: songdna-6-1-0-zip-build
-  cancel-in-progress: false
-
-jobs:
-  build:
-    name: Find ZIP, validate source and build APK
-    runs-on: ubuntu-latest
-    timeout-minutes: 55
-
-    steps:
-      - name: Checkout GitHub repository
-        uses: actions/checkout@v4
-
-      - name: Find and extract SONGDNA ZIP
+      - name: Find and extract SONGDNA 6.1.0 ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching repository for ZIP files..."
+          echo "Searching specifically for SONGDNA 6.1.0 Stage151 ZIP..."
 
           mapfile -t ZIP_FILES < <(
-            find . -type f -iname '*.zip' \
-              -not -path './.git/*' | sort
+            find . -type f -iname 'SONGDNA_SMART_STUDIO_v6_1_0_STAGE151.zip' \
+              -not -path './.git/*'
           )
 
-          if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
-            echo "ERROR: No ZIP file found in repository."
+          if [ "${#ZIP_FILES[@]}" -ne 1 ]; then
+            echo "ERROR: Expected exactly one 6.1.0 Stage151 ZIP."
+            echo "Matching files found: ${#ZIP_FILES[@]}"
+            printf '%s\n' "${ZIP_FILES[@]}"
             exit 1
           fi
 
-          echo "Found ZIP files:"
-          printf '%s\n' "${ZIP_FILES[@]}"
-
-          SELECTED=""
-
-          for FILE in "${ZIP_FILES[@]}"; do
-            if [[ "$(basename "$FILE" | tr '[:upper:]' '[:lower:]')" == *songdna* ]]; then
-              SELECTED="$FILE"
-              break
-            fi
-          done
-
-          if [ -z "$SELECTED" ]; then
-            if [ "${#ZIP_FILES[@]}" -eq 1 ]; then
-              SELECTED="${ZIP_FILES[0]}"
-            else
-              echo "ERROR: Multiple ZIP files found, but none has SONGDNA in its name."
-              echo "Rename the intended source ZIP to include SONGDNA."
-              exit 1
-            fi
-          fi
-
+          SELECTED="${ZIP_FILES[0]}"
           echo "Selected source ZIP: $SELECTED"
 
-          mkdir -p "$RUNNER_TEMP/songdna-extracted"
-          unzip -q "$SELECTED" -d "$RUNNER_TEMP/songdna-extracted"
+          EXTRACT_DIR="$RUNNER_TEMP/songdna-extracted"
+          mkdir -p "$EXTRACT_DIR"
+          unzip -q "$SELECTED" -d "$EXTRACT_DIR"
 
-          VERIFY_FILE="$(find "$RUNNER_TEMP/songdna-extracted" \
-            -type f -path '*/scripts/verify-source.py' -print -quit)"
+          SOURCE_DIR=""
 
-          if [ -z "$VERIFY_FILE" ]; then
-            echo "ERROR: scripts/verify-source.py not found inside ZIP."
-            find "$RUNNER_TEMP/songdna-extracted" -maxdepth 4 -type f | head -100
+          while IFS= read -r VERIFY_FILE; do
+            CANDIDATE="$(dirname "$(dirname "$VERIFY_FILE")")"
+
+            if [ -f "$CANDIDATE/scripts/verify-source.py" ] &&
+               [ -f "$CANDIDATE/app.js" ] &&
+               [ -d "$CANDIDATE/android-wrapper" ] &&
+               [ -d "$CANDIDATE/backend" ] &&
+               [ -d "$CANDIDATE/www" ]; then
+              SOURCE_DIR="$CANDIDATE"
+              break
+            fi
+          done < <(
+            find "$EXTRACT_DIR" -type f \
+              -path '*/scripts/verify-source.py' \
+              -not -path '*/android-wrapper/*' \
+              -not -path '*/www/*'
+          )
+
+          if [ -z "$SOURCE_DIR" ]; then
+            echo "ERROR: Complete project root could not be identified."
+            echo "ZIP contents:"
+            find "$EXTRACT_DIR" -maxdepth 4 -type f | head -100
             exit 1
           fi
 
-          SOURCE_DIR="$(dirname "$(dirname "$VERIFY_FILE")")"
-
-          echo "Detected source directory: $SOURCE_DIR"
+          echo "Verified project root: $SOURCE_DIR"
 
           cp -a "$SOURCE_DIR/." "$GITHUB_WORKSPACE/"
 
           test -f scripts/verify-source.py
           test -f app.js
           test -d android-wrapper
+          test -d backend
+          test -d www
 
-          echo "ZIP extraction and source placement successful."
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Set up Python 3
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Install browser test dependency
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install playwright
-          python -m playwright install --with-deps chromium
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
-
-      - name: Install Android SDK packages
-        run: |
-          sdkmanager --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Verify extracted source and manifests
-        run: python3 scripts/verify-source.py
-
-      - name: Run JavaScript and Python tests
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          node --check app.js
-          node --check www/app.js
-          node --check backend/server.js
-          npm --prefix backend run check
-
-          shopt -s nullglob
-          JS_TESTS=(scripts/test-*.js tests/test-*.js test-gemini-instruction-engine.js)
-
-          for test_file in "${JS_TESTS[@]}"; do
-            echo "Running $test_file"
-            node "$test_file"
-          done
-
-          PY_TESTS=(scripts/test-*.py)
-
-          for test_file in "${PY_TESTS[@]}"; do
-            echo "Running $test_file"
-            python3 "$test_file"
-          done
-
-      - name: Build Android debug APK
-        run: |
-          gradle --no-daemon --stacktrace --warning-mode all \
-            -p android-wrapper clean assembleDebug
-
-      - name: Verify APK and calculate SHA256
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-
-          SHA256="$(sha256sum "$APK" | awk '{print $1}')"
-
-          {
-            echo "## SONGDNA SMART STUDIO 6.1.0"
-            echo ""
-            echo "- ZIP extraction: successful"
-            echo "- Source validation: successful"
-            echo "- APK build: successful"
-            echo "- APK: app-debug.apk"
-            echo "- SHA256: \`$SHA256\`"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: SONGDNA-Studio-6.1.0-debug-APK
-          path: android-wrapper/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 14
+          echo "SONGDNA 6.1.0 source extraction successful."
           
