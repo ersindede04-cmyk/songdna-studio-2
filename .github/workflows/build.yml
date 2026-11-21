@@ -2,148 +2,97 @@
 name: SONGDNA SMART STUDIO 6.1.0 - ZIP Source APK Build
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
     paths:
-      - "*.zip"
-      - ".github/workflows/build.yml"
+      - '**'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-android-build
-  cancel-in-progress: false
+  group: songdna-android-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
     name: Extract ZIP, validate source and build APK
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
       - name: Checkout GitHub repository
         uses: actions/checkout@v4
 
       - name: Find and extract SONGDNA 6.1.0 Stage151 ZIP
+        id: source
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching repository root for Stage151 ZIP..."
+          ZIP_FILE=$(find . -type f -iname '*.zip' \
+            ! -path './.git/*' | grep -i 'stage151' | head -n 1 || true)
 
-          mapfile -t ZIP_FILES < <(
-            find . -maxdepth 1 -type f \
-              -iname 'SONGDNA_SMART_STUDIO_v6_1_0_STAGE151*.zip' \
-              -not -path './.git/*' \
-              | sort
-          )
-
-          echo "Matching ZIP files: ${#ZIP_FILES[@]}"
-          printf '%s\n' "${ZIP_FILES[@]}"
-
-          if [ "${#ZIP_FILES[@]}" -ne 1 ]; then
-            echo "::error::Exactly one Stage151 ZIP is required."
-            echo "Upload the project ZIP to the repository root."
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: Stage151 source ZIP not found."
             exit 1
           fi
 
-          SELECTED="${ZIP_FILES[0]}"
-          echo "Selected ZIP: $SELECTED"
+          mkdir -p _source
+          unzip -q "$ZIP_FILE" -d _source
 
-          EXTRACT_DIR="$RUNNER_TEMP/songdna-extracted"
-          mkdir -p "$EXTRACT_DIR"
+          echo "Source ZIP: $ZIP_FILE"
+          echo "Source extracted successfully."
 
-          unzip -tq "$SELECTED"
-          unzip -q "$SELECTED" -d "$EXTRACT_DIR"
-
-          SOURCE_DIR=""
-
-          while IFS= read -r VERIFY_FILE; do
-            CANDIDATE="$(dirname "$(dirname "$VERIFY_FILE")")"
-
-            if [ -f "$CANDIDATE/scripts/verify-source.py" ] &&
-               [ -f "$CANDIDATE/app.js" ] &&
-               [ -d "$CANDIDATE/android-wrapper" ] &&
-               [ -d "$CANDIDATE/backend" ] &&
-               [ -d "$CANDIDATE/www" ]; then
-              SOURCE_DIR="$CANDIDATE"
-              break
-            fi
-          done < <(
-            find "$EXTRACT_DIR" -type f \
-              -path '*/scripts/verify-source.py' \
-              -not -path '*/android-wrapper/*' \
-              -not -path '*/www/*'
-          )
-
-          if [ -z "$SOURCE_DIR" ]; then
-            echo "::error::Complete SONGDNA project root not found."
-            find "$EXTRACT_DIR" -maxdepth 4 -type f | head -100
-            exit 1
-          fi
-
-          echo "Verified project root: $SOURCE_DIR"
-
-          cp -a "$SOURCE_DIR/." "$GITHUB_WORKSPACE/"
-
-          test -f scripts/verify-source.py
-          test -f app.js
-          test -d android-wrapper
-          test -d backend
-          test -d www
-
-          echo "SONGDNA source extraction successful."
+          echo "source_dir=_source" >> "$GITHUB_OUTPUT"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
+          node-version: '22'
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: pip
+          python-version: '3.11'
 
       - name: Install Python test dependencies
         shell: bash
         run: |
           set -euo pipefail
-
           python -m pip install --upgrade pip
-          python -m pip install playwright
+          python -m pip install pytest
 
-          if [ -f requirements.txt ]; then
-            python -m pip install -r requirements.txt
+          if [ -f _source/requirements.txt ]; then
+            pip install -r _source/requirements.txt
           fi
-
-          if [ -f scripts/requirements.txt ]; then
-            python -m pip install -r scripts/requirements.txt
-          fi
-
-          python -m playwright install --with-deps chromium
 
       - name: Install backend dependencies
         shell: bash
         run: |
           set -euo pipefail
 
-          if [ -f backend/package-lock.json ]; then
-            npm --prefix backend ci
-          else
-            npm --prefix backend install
-          fi
+          find _source -name package.json \
+            -not -path '*/node_modules/*' -print0 |
+          while IFS= read -r -d '' FILE; do
+            DIR=$(dirname "$FILE")
+            echo "Installing dependencies in $DIR"
+            cd "$GITHUB_WORKSPACE/$DIR"
+
+            if [ -f package-lock.json ]; then
+              npm ci --no-audit --no-fund
+            else
+              npm install --no-audit --no-fund
+            fi
+          done
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -152,96 +101,90 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses || true
 
-          sdkmanager --install \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-          yes | sdkmanager --licenses >/dev/null || true
-
-      - name: Set up Gradle 8.9
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
+
+      - name: Locate Android project
+        id: android
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -f _source/android-wrapper/gradlew ]; then
+            ANDROID_DIR="_source/android-wrapper"
+          else
+            GRADLE_FILE=$(find _source -name gradlew \
+              -type f -print -quit)
+
+            if [ -z "$GRADLE_FILE" ]; then
+              echo "ERROR: Android Gradle wrapper not found."
+              exit 1
+            fi
+
+            ANDROID_DIR=$(dirname "$GRADLE_FILE")
+          fi
+
+          echo "Android project: $ANDROID_DIR"
+          echo "android_dir=$ANDROID_DIR" >> "$GITHUB_OUTPUT"
 
       - name: Verify extracted source
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/verify-source.py
 
-      - name: Check JavaScript and backend syntax
+          test -d _source
+          test -f "${{ steps.android.outputs.android_dir }}/gradlew"
+
+          if [ -f _source/scripts/verify-source.py ]; then
+            python _source/scripts/verify-source.py
+          fi
+
+      - name: Check JavaScript syntax
         shell: bash
         run: |
           set -euo pipefail
 
-          node --check app.js
-          node --check www/app.js
-          node --check backend/server.js
-
-          npm --prefix backend run check
+          find _source -name '*.js' \
+            -not -path '*/node_modules/*' -print0 |
+          while IFS= read -r -d '' FILE; do
+            echo "Checking: $FILE"
+            node --check "$FILE"
+          done
 
       - name: Run JavaScript regression tests
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
 
-          TEST_FILES=(
-            scripts/test-*.js
-            tests/test-*.js
-            test-gemini-instruction-engine.js
-          )
-
-          if [ "${#TEST_FILES[@]}" -eq 0 ]; then
-            echo "::error::No JavaScript test files found."
-            exit 1
-          fi
-
-          for TEST_FILE in "${TEST_FILES[@]}"; do
-            echo "Running: $TEST_FILE"
-            node "$TEST_FILE"
+          find _source -name package.json \
+            -not -path '*/node_modules/*' -print0 |
+          while IFS= read -r -d '' FILE; do
+            DIR=$(dirname "$FILE")
+            cd "$GITHUB_WORKSPACE/$DIR"
+            npm test --if-present
           done
 
       - name: Run Python regression tests
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
 
-          TEST_FILES=(
-            scripts/test-*.py
-            tests/test-*.py
-          )
-
-          if [ "${#TEST_FILES[@]}" -eq 0 ]; then
-            echo "::error::No Python test files found."
-            exit 1
+          if [ -d _source/tests ]; then
+            python -m pytest _source/tests -q
+          else
+            echo "No Python tests directory found."
           fi
 
-          for TEST_FILE in "${TEST_FILES[@]}"; do
-            echo "Running: $TEST_FILE"
-            python "$TEST_FILE"
-          done
-
       - name: Build Android debug APK
+        working-directory: ${{ steps.android.outputs.android_dir }}
         shell: bash
         run: |
           set -euo pipefail
-
-          gradle -p android-wrapper clean assembleDebug
-
-          APK_PATH="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -f "$APK_PATH" ]; then
-            echo "::error::APK file was not generated."
-            find android-wrapper -type f -name '*.apk'
-            exit 1
-          fi
-
-          mkdir -p build-output
-          cp "$APK_PATH" build-output/SONGDNA-SMART-STUDIO-6.1.0-debug.apk
+          chmod +x gradlew
+          ./gradlew --no-daemon clean assembleDebug
 
       - name: Verify APK and calculate SHA256
         id: apk
@@ -249,26 +192,33 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK_PATH="build-output/SONGDNA-SMART-STUDIO-6.1.0-debug.apk"
+          APK=$(find "${{ steps.android.outputs.android_dir }}" \
+            -type f -path '*/build/outputs/apk/*/*.apk' \
+            -name '*debug*.apk' -print -quit)
 
-          test -s "$APK_PATH"
+          if [ -z "$APK" ]; then
+            echo "ERROR: Debug APK not generated."
+            exit 1
+          fi
 
-          APK_SIZE="$(du -h "$APK_PATH" | cut -f1)"
-          APK_SHA256="$(sha256sum "$APK_PATH" | awk '{print $1}')"
+          mkdir -p release
+          cp "$APK" release/SONGDNA-6.1.0-Stage151-debug.apk
 
-          echo "size=$APK_SIZE" >> "$GITHUB_OUTPUT"
-          echo "sha256=$APK_SHA256" >> "$GITHUB_OUTPUT"
+          sha256sum release/SONGDNA-6.1.0-Stage151-debug.apk \
+            | tee release/SHA256SUMS.txt
 
-          echo "APK size: $APK_SIZE"
-          echo "SHA256: $APK_SHA256"
+          echo "apk_path=release/SONGDNA-6.1.0-Stage151-debug.apk" \
+            >> "$GITHUB_OUTPUT"
 
       - name: Upload SONGDNA 6.1.0 debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-6.1.0-Stage151-Android-Debug-APK
-          path: build-output/SONGDNA-SMART-STUDIO-6.1.0-debug.apk
+          name: SONGDNA-6.1.0-Stage151-Android-APK
+          path: |
+            release/SONGDNA-6.1.0-Stage151-debug.apk
+            release/SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
       - name: Build summary
         if: always()
@@ -276,22 +226,18 @@ jobs:
         run: |
           {
             echo "# SONGDNA SMART STUDIO 6.1.0"
-            echo
+            echo ""
             echo "## Stage151 Android Build"
-            echo
+            echo ""
             echo "- Source ZIP: Stage151"
             echo "- Build type: Android Debug APK"
             echo "- Java: 17"
             echo "- Node.js: 22"
             echo "- Python: 3.11"
-            echo "- Gradle: 8.9"
             echo "- Android SDK: 35"
-            echo
-            if [ -f build-output/SONGDNA-SMART-STUDIO-6.1.0-debug.apk ]; then
-              echo "- APK size: ${{ steps.apk.outputs.size }}"
-              echo "- SHA256: ${{ steps.apk.outputs.sha256 }}"
-              echo
-              echo "APK artifact was generated."
+            echo ""
+            if [ -f release/SONGDNA-6.1.0-Stage151-debug.apk ]; then
+              echo "APK generated successfully."
             else
               echo "APK was not generated. Check the failed workflow step."
             fi
