@@ -69,7 +69,7 @@ jobs:
           if len(matches) != 1:
               print("::error::Stage151 ZIP selection failed.")
               print(f"Expected exactly one matching ZIP. Found: {len(matches)}")
-              print("ZIP filename must contain SONGDNA, 6.1.0 and STAGE151.")
+              print("Filename must contain SONGDNA, 6.1.0 and STAGE151.")
               sys.exit(1)
 
           archive = matches[0]
@@ -164,14 +164,15 @@ jobs:
           python-version: '3.11'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
           sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
-          yes | sdkmanager --licenses >/dev/null
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v5
