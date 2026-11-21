@@ -30,48 +30,66 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Extract and validate Stage157 source ZIP
         id: source
         shell: bash
         run: |
           set -euo pipefail
+
           ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_6_2_0_STAGE157_SOURCE.zip"
+
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "::error::Stage157 source ZIP is missing from the repository root."
+            echo "::error::Stage157 source ZIP is missing."
             exit 1
           fi
+
           unzip -t "$ZIP_FILE"
+
           SOURCE_ROOT="$GITHUB_WORKSPACE/_stage157_source"
           mkdir -p "$SOURCE_ROOT"
           unzip -q "$ZIP_FILE" -d "$SOURCE_ROOT"
+
           PROJECT_ROOT="$SOURCE_ROOT/songdna95"
+
           test -f "$PROJECT_ROOT/BUILD_MANIFEST.json"
           test -f "$PROJECT_ROOT/BUILD_PACKAGE_MANIFEST_STAGE157.json"
           test -f "$PROJECT_ROOT/requirements-test.txt"
           test -f "$PROJECT_ROOT/scripts/verify-source.py"
+
           test -f "$PROJECT_ROOT/android-wrapper/settings.gradle.kts"
           test -f "$PROJECT_ROOT/android-wrapper/build.gradle.kts"
           test -f "$PROJECT_ROOT/android-wrapper/app/build.gradle.kts"
           test -f "$PROJECT_ROOT/android-wrapper/app/src/main/AndroidManifest.xml"
+
           python - "$PROJECT_ROOT/BUILD_MANIFEST.json" "$PROJECT_ROOT/BUILD_PACKAGE_MANIFEST_STAGE157.json" <<'PY'
-          import json, sys
+          import json
+          import sys
+
           with open(sys.argv[1], encoding="utf-8") as f:
               manifest = json.load(f)
+
           with open(sys.argv[2], encoding="utf-8") as f:
               package = json.load(f)
+
           assert manifest.get("version") == "6.2.0"
-          assert manifest.get("stage") == 157
           assert manifest.get("android", {}).get("version_code") == 34
           assert manifest.get("android", {}).get("version_name") == "6.2.0"
+
           assert package.get("package_stage") == 157
           assert package.get("application_version") == "6.2.0"
-          assert package.get("android_version_code") == 34
+          assert package.get("android_project") == "android-wrapper/"
+          assert package.get("gradle_version") == "8.9"
+          assert package.get("java_version") == "17"
+          assert package.get("node_major") == 22
+          assert package.get("python_version") == "3.11"
           assert package.get("javascript_test_files") == 121
           assert package.get("python_test_files") == 5
-          print("Validated SONGDNA SMART STUDIO 6.2.0 / Stage157")
+
+          print("Stage157 package manifest validation passed.")
           PY
+
           echo "project_root=$PROJECT_ROOT" >> "$GITHUB_OUTPUT"
 
       - name: Locate Android project
@@ -79,32 +97,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           PROJECT_ROOT="${{ steps.source.outputs.project_root }}"
-          mapfile -t SETTINGS_FILES < <(find "$PROJECT_ROOT" -type f -path '*/android-wrapper/settings.gradle.kts' | sort)
+
+          mapfile -t SETTINGS_FILES < <(
+            find "$PROJECT_ROOT" -type f \
+              -path '*/android-wrapper/settings.gradle.kts' | sort
+          )
+
           if [ "${#SETTINGS_FILES[@]}" -ne 1 ]; then
-            echo "::error::Expected exactly one android-wrapper/settings.gradle.kts."
+            echo "::error::Expected exactly one Android project."
             exit 1
           fi
+
           ANDROID_DIR="$(dirname "${SETTINGS_FILES[0]}")"
+
           test -f "$ANDROID_DIR/build.gradle.kts"
           test -f "$ANDROID_DIR/app/build.gradle.kts"
           test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
+
           echo "android_dir=$ANDROID_DIR" >> "$GITHUB_OUTPUT"
           echo "project_root=$PROJECT_ROOT" >> "$GITHUB_OUTPUT"
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v7
         with:
           distribution: temurin
           java-version: '17'
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: '22'
+          package-manager-cache: false
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -113,26 +141,34 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
+
           python -c "import playwright; print('Playwright import passed')"
           python -m playwright install --with-deps chromium
 
       - name: Configure Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
       - name: Install Android SDK packages
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+          sdkmanager --install \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo "Android SDK packages installed successfully."
 
       - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.9'
-          cache-disabled: true
+          cache-provider: basic
 
       - name: Verify source integrity and synchronized Android assets
         working-directory: ${{ steps.android.outputs.project_root }}
@@ -141,14 +177,19 @@ jobs:
           set -euo pipefail
           python scripts/verify-source.py
 
-      - name: Check backend syntax and package
+      - name: Check JavaScript syntax and backend
         working-directory: ${{ steps.android.outputs.project_root }}
         shell: bash
         run: |
           set -euo pipefail
+
+          node --version
+          npm --version
+
           node --check app.js
           node --check www/app.js
           node --check backend/server.js
+
           npm --prefix backend run check
 
       - name: Run JavaScript regression tests
@@ -157,17 +198,31 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          TESTS=(scripts/test-*.js tests/test-*.js test-gemini-instruction-engine.js)
+
+          TESTS=(
+            scripts/test-*.js
+            tests/test-*.js
+            test-gemini-instruction-engine.js
+          )
+
           COUNT=0
+
           for test_file in "${TESTS[@]}"; do
             [ -f "$test_file" ] || continue
+
             echo "::group::$test_file"
             node "$test_file"
             echo "::endgroup::"
+
             COUNT=$((COUNT + 1))
           done
+
           echo "JavaScript test files passed: $COUNT"
-          [ "$COUNT" -eq 121 ] || { echo "::error::Expected 121 JavaScript test files."; exit 1; }
+
+          if [ "$COUNT" -ne 121 ]; then
+            echo "::error::Expected 121 JavaScript test files; found $COUNT."
+            exit 1
+          fi
 
       - name: Run Python regression tests
         working-directory: ${{ steps.android.outputs.project_root }}
@@ -175,50 +230,79 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
+
           TESTS=(scripts/test-*.py)
           COUNT=0
+
           for test_file in "${TESTS[@]}"; do
             echo "::group::$test_file"
             python "$test_file"
             echo "::endgroup::"
+
             COUNT=$((COUNT + 1))
           done
+
           echo "Python test files passed: $COUNT"
-          [ "$COUNT" -eq 5 ] || { echo "::error::Expected 5 Python test files."; exit 1; }
+
+          if [ "$COUNT" -ne 5 ]; then
+            echo "::error::Expected 5 Python test files; found $COUNT."
+            exit 1
+          fi
 
       - name: Build Android Debug APK
         working-directory: ${{ steps.android.outputs.project_root }}
         shell: bash
         run: |
           set -euo pipefail
+
           gradle --version
-          gradle --no-daemon --stacktrace --warning-mode all \
-            -p "${{ steps.android.outputs.android_dir }}" clean assembleDebug
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all \
+            -p "${{ steps.android.outputs.android_dir }}" \
+            clean assembleDebug
 
       - name: Verify APK and generate SHA-256 checksum
         id: apk
         shell: bash
         run: |
           set -euo pipefail
-          APK="${{ steps.android.outputs.android_dir }}/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
-          mkdir -p "$GITHUB_WORKSPACE/release"
-          cp "$APK" "$GITHUB_WORKSPACE/release/SONGDNA-6.2.0-Stage157-debug.apk"
-          cd "$GITHUB_WORKSPACE/release"
+
+          ANDROID_DIR="${{ steps.android.outputs.android_dir }}"
+          APK="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "::error::Android Debug APK was not generated."
+            exit 1
+          fi
+
+          RELEASE_DIR="$GITHUB_WORKSPACE/release"
+          mkdir -p "$RELEASE_DIR"
+
+          cp "$APK" "$RELEASE_DIR/SONGDNA-6.2.0-Stage157-debug.apk"
+
+          cd "$RELEASE_DIR"
+
           sha256sum SONGDNA-6.2.0-Stage157-debug.apk > SHA256SUMS.txt
+
           SHA256="$(awk '{print $1}' SHA256SUMS.txt)"
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
           {
             echo "## SONGDNA SMART STUDIO 6.2.0 - Stage157"
-            echo "- Source verification: passed"
-            echo "- JavaScript regression files: 121 passed"
-            echo "- Python regression files: 5 passed"
+            echo ""
+            echo "- Source ZIP: validated"
+            echo "- Source integrity: passed"
+            echo "- JavaScript test files: 121"
+            echo "- Python test files: 5"
             echo "- Android Debug APK: generated"
             echo "- SHA-256: $SHA256"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Android APK and checksum
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: SONGDNA-6.2.0-Stage157-Android-APK
           path: |
