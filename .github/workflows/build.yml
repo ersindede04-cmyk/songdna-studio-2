@@ -1,5 +1,5 @@
 
-name: SONGDNA SMART STUDIO 6.1.0 - ZIP Source APK Build
+name: SONGDNA SMART STUDIO 6.1.0 - Automatic ZIP APK Build
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ on:
     branches:
       - main
     paths:
-      - 'SONGDNA_SMART_STUDIO_v6_1_0_STAGE151.zip'
+      - '**.zip'
       - '.github/workflows/build.yml'
 
 permissions:
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    name: Extract ZIP, validate source and build APK
+    name: Find ZIP, validate source and build APK
     runs-on: ubuntu-latest
     timeout-minutes: 55
 
@@ -27,39 +27,70 @@ jobs:
       - name: Checkout GitHub repository
         uses: actions/checkout@v4
 
-      - name: Find and extract SONGDNA 6.1.0 ZIP
+      - name: Find and extract SONGDNA ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="SONGDNA_SMART_STUDIO_v6_1_0_STAGE151.zip"
+          echo "Searching repository for ZIP files..."
 
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: ZIP file not found: $ZIP_FILE"
-            echo "Upload the ZIP file to the repository root."
+          mapfile -t ZIP_FILES < <(
+            find . -type f -iname '*.zip' \
+              -not -path './.git/*' | sort
+          )
+
+          if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
+            echo "ERROR: No ZIP file found in repository."
             exit 1
           fi
+
+          echo "Found ZIP files:"
+          printf '%s\n' "${ZIP_FILES[@]}"
+
+          SELECTED=""
+
+          for FILE in "${ZIP_FILES[@]}"; do
+            if [[ "$(basename "$FILE" | tr '[:upper:]' '[:lower:]')" == *songdna* ]]; then
+              SELECTED="$FILE"
+              break
+            fi
+          done
+
+          if [ -z "$SELECTED" ]; then
+            if [ "${#ZIP_FILES[@]}" -eq 1 ]; then
+              SELECTED="${ZIP_FILES[0]}"
+            else
+              echo "ERROR: Multiple ZIP files found, but none has SONGDNA in its name."
+              echo "Rename the intended source ZIP to include SONGDNA."
+              exit 1
+            fi
+          fi
+
+          echo "Selected source ZIP: $SELECTED"
 
           mkdir -p "$RUNNER_TEMP/songdna-extracted"
-          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-extracted"
+          unzip -q "$SELECTED" -d "$RUNNER_TEMP/songdna-extracted"
 
-          SOURCE_DIR="$RUNNER_TEMP/songdna-extracted/songdna95"
+          VERIFY_FILE="$(find "$RUNNER_TEMP/songdna-extracted" \
+            -type f -path '*/scripts/verify-source.py' -print -quit)"
 
-          if [ ! -d "$SOURCE_DIR" ]; then
-            echo "ERROR: Expected songdna95 directory not found inside ZIP."
-            find "$RUNNER_TEMP/songdna-extracted" -maxdepth 3 -type d
+          if [ -z "$VERIFY_FILE" ]; then
+            echo "ERROR: scripts/verify-source.py not found inside ZIP."
+            find "$RUNNER_TEMP/songdna-extracted" -maxdepth 4 -type f | head -100
             exit 1
           fi
 
-          if [ ! -f "$SOURCE_DIR/scripts/verify-source.py" ]; then
-            echo "ERROR: ZIP source structure is incomplete."
-            exit 1
-          fi
+          SOURCE_DIR="$(dirname "$(dirname "$VERIFY_FILE")")"
+
+          echo "Detected source directory: $SOURCE_DIR"
 
           cp -a "$SOURCE_DIR/." "$GITHUB_WORKSPACE/"
 
-          echo "ZIP extraction completed."
-          echo "Source files copied to repository workspace."
+          test -f scripts/verify-source.py
+          test -f app.js
+          test -d android-wrapper
+
+          echo "ZIP extraction and source placement successful."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -137,11 +168,7 @@ jobs:
           set -euo pipefail
 
           APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: APK was not generated."
-            exit 1
-          fi
+          test -s "$APK"
 
           SHA256="$(sha256sum "$APK" | awk '{print $1}')"
 
