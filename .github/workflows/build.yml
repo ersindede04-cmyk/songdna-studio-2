@@ -14,157 +14,180 @@ permissions:
   contents: read
 
 concurrency:
-  group: songdna-6-1-0-zip-build
+  group: songdna-610-zip-apk-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Extract ZIP, validate source and build APK
+    name: Find ZIP, validate source and build APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
     steps:
       - name: Checkout GitHub repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
-      - name: Find and extract SONGDNA 6.1.0 ZIP
+      - name: Find and extract the uploaded Stage151 ZIP
+        id: source
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_NAME="SONGDNA_SMART_STUDIO_v6_1_0_STAGE151.zip"
+          python3 <<'PY'
+          import os
+          import re
+          import sys
+          import zipfile
+          import shutil
+          from pathlib import Path
 
-          echo "Searching repository for: $ZIP_NAME"
+          repo = Path(os.environ["GITHUB_WORKSPACE"])
+          temp = Path(os.environ["RUNNER_TEMP"]) / "songdna-610-stage151"
+          temp.mkdir(parents=True, exist_ok=True)
 
-          mapfile -t ZIP_FILES < <(
-            find . -type f -iname "$ZIP_NAME" \
-              -not -path './.git/*' | sort
+          def normalized(value):
+              return re.sub(r"[^A-Z0-9]", "", value.upper())
+
+          zips = sorted(
+              p for p in repo.rglob("*")
+              if p.is_file()
+              and p.suffix.lower() == ".zip"
+              and ".git" not in p.parts
           )
 
-          if [ "${#ZIP_FILES[@]}" -ne 1 ]; then
-            echo "ERROR: Expected exactly one matching ZIP."
-            echo "Found: ${#ZIP_FILES[@]}"
-            printf '%s\n' "${ZIP_FILES[@]}"
-            exit 1
-          fi
+          print(f"ZIP files found: {len(zips)}")
+          for item in zips:
+              print(f" - {item.relative_to(repo)}")
 
-          SELECTED="${ZIP_FILES[0]}"
-          echo "Selected ZIP: $SELECTED"
+          matches = [
+              p for p in zips
+              if "SONGDNASMARTSTUDIO" in normalized(p.name)
+              and "V610" in normalized(p.name)
+              and "STAGE151" in normalized(p.name)
+          ]
 
-          echo "Checking ZIP integrity..."
-          unzip -t "$SELECTED"
+          if len(matches) != 1:
+              print("::error::Stage151 ZIP selection failed.")
+              print(f"Expected exactly one matching ZIP. Found: {len(matches)}")
+              print("ZIP filename must contain SONGDNA, 6.1.0 and STAGE151.")
+              sys.exit(1)
 
-          EXTRACT_DIR="$RUNNER_TEMP/songdna-extracted"
-          mkdir -p "$EXTRACT_DIR"
+          archive = matches[0]
+          print(f"Selected ZIP: {archive.relative_to(repo)}")
 
-          echo "Extracting source ZIP..."
-          unzip -q "$SELECTED" -d "$EXTRACT_DIR"
+          if not zipfile.is_zipfile(archive):
+              print("::error::Selected file is not a valid ZIP.")
+              sys.exit(1)
 
-          SOURCE_DIR=""
+          extract = temp / "extracted"
+          extract.mkdir(parents=True, exist_ok=True)
 
-          while IFS= read -r VERIFY_FILE; do
-            CANDIDATE="$(dirname "$VERIFY_FILE")"
+          with zipfile.ZipFile(archive) as zf:
+              bad = zf.testzip()
+              if bad:
+                  print(f"::error::ZIP integrity error: {bad}")
+                  sys.exit(1)
+              zf.extractall(extract)
 
-            if [ -f "$CANDIDATE/app.js" ] &&
-               [ -f "$CANDIDATE/index.html" ] &&
-               [ -d "$CANDIDATE/android-wrapper" ] &&
-               [ -d "$CANDIDATE/backend" ] &&
-               [ -d "$CANDIDATE/www" ]; then
-              SOURCE_DIR="$CANDIDATE"
-              break
-            fi
-          done < <(
-            find "$EXTRACT_DIR" -type f \
-              -path '*/scripts/verify-source.py' \
-              -not -path '*/android-wrapper/*' \
-              -not -path '*/www/*'
+          required_dirs = ("android-wrapper", "backend", "www")
+          roots = []
+
+          for marker in extract.rglob("scripts/verify-source.py"):
+              candidate = marker.parent.parent
+
+              if (
+                  (candidate / "app.js").is_file()
+                  and all((candidate / d).is_dir() for d in required_dirs)
+              ):
+                  roots.append(candidate)
+
+          roots = list(dict.fromkeys(roots))
+
+          if len(roots) != 1:
+              print("::error::Could not identify exactly one complete project root.")
+              print(f"Valid roots found: {len(roots)}")
+              for root in roots:
+                  print(root)
+              sys.exit(1)
+
+          source = roots[0]
+          print(f"Verified project root: {source.relative_to(extract)}")
+
+          for item in source.iterdir():
+              destination = repo / item.name
+
+              if destination.exists():
+                  if destination.is_dir():
+                      shutil.rmtree(destination)
+                  else:
+                      destination.unlink()
+
+              if item.is_dir():
+                  shutil.copytree(item, destination)
+              else:
+                  shutil.copy2(item, destination)
+
+          required = (
+              "app.js",
+              "scripts/verify-source.py",
+              "android-wrapper",
+              "backend",
+              "www"
           )
 
-          if [ -z "$SOURCE_DIR" ]; then
-            echo "ERROR: Complete SONGDNA project root not found."
-            echo "Extracted directory structure:"
-            find "$EXTRACT_DIR" -maxdepth 5 -type d
-            exit 1
-          fi
+          for name in required:
+              if not (repo / name).exists():
+                  print(f"::error::Missing extracted project file: {name}")
+                  sys.exit(1)
 
-          echo "Verified project root: $SOURCE_DIR"
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"zip_name={archive.name}\n")
+              out.write(f"source_root={source.relative_to(extract)}\n")
 
-          cp -a "$SOURCE_DIR/." "$GITHUB_WORKSPACE/"
-
-          REQUIRED_FILES=(
-            "scripts/verify-source.py"
-            "app.js"
-            "index.html"
-            "www/app.js"
-            "backend/server.js"
-            "backend/package.json"
-            "android-wrapper/settings.gradle.kts"
-            "android-wrapper/app/build.gradle.kts"
-            "android-wrapper/app/src/main/AndroidManifest.xml"
-          )
-
-          for FILE in "${REQUIRED_FILES[@]}"; do
-            if [ ! -f "$GITHUB_WORKSPACE/$FILE" ]; then
-              echo "ERROR: Required file missing after extraction: $FILE"
-              exit 1
-            fi
-          done
-
-          echo "SONGDNA 6.1.0 ZIP extraction successful."
+          print("Stage151 source extraction completed successfully.")
+          PY
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.x'
-
-      - name: Install browser test dependency
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install playwright
-          python -m playwright install --with-deps chromium
+          python-version: '3.11'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
+        uses: android-actions/setup-android@v3
 
       - name: Install Android SDK packages
+        shell: bash
         run: |
-          sdkmanager --install \
-            'platform-tools' \
-            'platforms;android-35' \
-            'build-tools;35.0.0'
+          set -euo pipefail
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+          yes | sdkmanager --licenses >/dev/null
 
       - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '8.9'
 
-      - name: Verify synchronized source and manifests
-        run: |
-          set -euo pipefail
-          python3 scripts/verify-source.py
+      - name: Verify extracted source
+        run: python scripts/verify-source.py
 
       - name: Check JavaScript and backend syntax
+        shell: bash
         run: |
           set -euo pipefail
-
           node --check app.js
           node --check www/app.js
           node --check backend/server.js
-
           npm --prefix backend run check
 
       - name: Run JavaScript regression tests
@@ -172,49 +195,40 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
+          TEST_FILES=(scripts/test-*.js tests/test-*.js test-gemini-instruction-engine.js)
 
-          TESTS=(
-            scripts/test-*.js
-            tests/test-*.js
-            test-gemini-instruction-engine.js
-          )
-
-          if [ "${#TESTS[@]}" -eq 0 ]; then
-            echo "ERROR: No JavaScript test files found."
+          if [ "${#TEST_FILES[@]}" -eq 0 ]; then
+            echo "No JavaScript test files found."
             exit 1
           fi
 
-          for TEST in "${TESTS[@]}"; do
-            echo "Running $TEST"
-            node "$TEST"
+          for test_file in "${TEST_FILES[@]}"; do
+            echo "Running $test_file"
+            node "$test_file"
           done
-
-          echo "JavaScript regression tests completed."
 
       - name: Run Python regression tests
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
+          TEST_FILES=(scripts/test-*.py scripts/test_*.py tests/test-*.py tests/test_*.py)
 
-          TESTS=(scripts/test-*.py)
-
-          if [ "${#TESTS[@]}" -eq 0 ]; then
-            echo "ERROR: No Python test files found."
+          if [ "${#TEST_FILES[@]}" -eq 0 ]; then
+            echo "No Python test files found."
             exit 1
           fi
 
-          for TEST in "${TESTS[@]}"; do
-            echo "Running $TEST"
-            python3 "$TEST"
+          for test_file in "${TEST_FILES[@]}"; do
+            echo "Running $test_file"
+            python "$test_file"
           done
 
-          echo "Python regression tests completed."
-
       - name: Build Android debug APK
+        shell: bash
         run: |
-          gradle --no-daemon --stacktrace --warning-mode all \
-            -p android-wrapper clean assembleDebug
+          set -euo pipefail
+          gradle -p android-wrapper clean assembleDebug --no-daemon
 
       - name: Verify APK and calculate SHA256
         id: apk
@@ -224,32 +238,42 @@ jobs:
 
           APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ ! -s "$APK" ]; then
-            echo "ERROR: APK was not generated."
+          if [ ! -f "$APK" ]; then
+            echo "::error::Debug APK was not produced."
+            find android-wrapper -type f -name '*.apk' -print || true
             exit 1
           fi
 
-          SHA256="$(sha256sum "$APK" | awk '{print $1}')"
+          mkdir -p build-output
 
-          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          cp "$APK" \
+            build-output/SONGDNA-SMART-STUDIO-6.1.0-Stage151-debug.apk
 
-          {
-            echo "## SONGDNA SMART STUDIO 6.1.0"
-            echo ""
-            echo "- Source ZIP: Stage151"
-            echo "- ZIP extraction: PASS"
-            echo "- Source validation: PASS"
-            echo "- Regression tests: PASS"
-            echo "- Android debug APK: PASS"
-            echo "- SHA256: \`$SHA256\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          SHA="$(sha256sum build-output/SONGDNA-SMART-STUDIO-6.1.0-Stage151-debug.apk | awk '{print $1}')"
+
+          echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
+          echo "APK SHA256: $SHA"
 
       - name: Upload SONGDNA 6.1.0 debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: SONGDNA-SMART-STUDIO-6.1.0-DEBUG-APK
-          path: android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          name: SONGDNA-6.1.0-Stage151-Android-Debug-APK
+          path: build-output/SONGDNA-SMART-STUDIO-6.1.0-Stage151-debug.apk
           if-no-files-found: error
           retention-days: 14
 
-  
+      - name: Build summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## SONGDNA SMART STUDIO 6.1.0 — Stage151"
+            echo ""
+            echo "- Source ZIP: ${{ steps.source.outputs.zip_name }}"
+            echo "- Project root: ${{ steps.source.outputs.source_root }}"
+            echo "- Build type: Android debug APK"
+            echo "- SHA256: ${{ steps.apk.outputs.sha256 }}"
+            echo ""
+            echo "APK is available in Actions Artifacts if the build succeeded."
+          } >> "$GITHUB_STEP_SUMMARY"
+          
