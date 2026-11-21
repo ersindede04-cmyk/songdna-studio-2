@@ -1,5 +1,5 @@
 
-name: SONGDNA SMART STUDIO 6.1.0 - Stage153 APK Build
+name: SONGDNA SMART STUDIO 6.1.0 - Stage155 APK Build
 
 on:
   workflow_dispatch:
@@ -7,19 +7,19 @@ on:
     branches:
       - main
     paths:
-      - 'SONGDNA_SMART_STUDIO_6_1_0_STAGE153_SOURCE.zip'
+      - 'SONGDNA_SMART_STUDIO_6_1_0_STAGE155_SOURCE.zip'
       - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage153-apk-${{ github.ref }}
+  group: songdna-stage155-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Stage153 source validation and Android APK
+    name: Stage155 Source Validation and Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -27,51 +27,91 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find exact Stage153 source archive
+      - name: Validate and extract exact Stage155 source ZIP
         id: source
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_6_1_0_STAGE153_SOURCE.zip"
+
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_6_1_0_STAGE155_SOURCE.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
-            echo "ERROR: Required Stage153 archive is missing: $(basename "$ZIP_FILE")"
+            echo "::error::Stage155 source ZIP not found."
             exit 1
           fi
 
           unzip -t "$ZIP_FILE"
-          mkdir -p "$GITHUB_WORKSPACE/_stage153_source"
-          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/_stage153_source"
-          echo "source_root=$GITHUB_WORKSPACE/_stage153_source" >> "$GITHUB_OUTPUT"
 
-      - name: Locate Android project using Gradle settings
-        id: android
+          SOURCE_DIR="$GITHUB_WORKSPACE/_stage155_source"
+          mkdir -p "$SOURCE_DIR"
+          unzip -q "$ZIP_FILE" -d "$SOURCE_DIR"
+
+          echo "source_root=$SOURCE_DIR/songdna95" >> "$GITHUB_OUTPUT"
+
+      - name: Verify Stage155 package manifest
+        working-directory: ${{ steps.source.outputs.source_root }}
         shell: bash
         run: |
           set -euo pipefail
-          SOURCE_ROOT="${{ steps.source.outputs.source_root }}"
-          mapfile -t SETTINGS_FILES < <(
-            find "$SOURCE_ROOT" -type f \
+
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          p = Path("BUILD_PACKAGE_MANIFEST_STAGE155.json")
+          if not p.is_file():
+              raise SystemExit("Stage155 package manifest is missing")
+
+          data = json.loads(p.read_text(encoding="utf-8"))
+
+          expected = {
+              "package_stage": 155,
+              "application_version": "6.1.0",
+              "application_manifest_stage": 151,
+              "gradle_version": "8.9",
+              "java_version": "17",
+              "javascript_test_files": 120,
+              "python_test_files": 5,
+              "python_test_requirements": "requirements-test.txt",
+              "browser_test_engine": "Playwright-managed Chromium"
+          }
+
+          for key, value in expected.items():
+              if data.get(key) != value:
+                  raise SystemExit(
+                      f"Manifest mismatch: {key}: "
+                      f"expected {value!r}, got {data.get(key)!r}"
+                  )
+
+          print("PASS: Stage155 package manifest")
+          PY
+
+      - name: Locate Android project from Gradle settings
+        id: android
+        working-directory: ${{ steps.source.outputs.source_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mapfile -t SETTINGS < <(
+            find . -type f \
               -path '*/android-wrapper/settings.gradle.kts' | sort
           )
 
-          if [ "${#SETTINGS_FILES[@]}" -ne 1 ]; then
-            echo "ERROR: Expected one Android settings.gradle.kts; found ${#SETTINGS_FILES[@]}."
-            find "$SOURCE_ROOT" -type f \
-              \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print
+          if [ "${#SETTINGS[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one Android Gradle settings file."
+            printf '%s\n' "${SETTINGS[@]}"
             exit 1
           fi
 
-          ANDROID_DIR="$(dirname "${SETTINGS_FILES[0]}")"
-          PROJECT_ROOT="$(dirname "$ANDROID_DIR")"
+          ANDROID_DIR="$(dirname "${SETTINGS[0]}")"
 
           test -f "$ANDROID_DIR/build.gradle.kts"
           test -f "$ANDROID_DIR/app/build.gradle.kts"
           test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
 
           echo "android_dir=$ANDROID_DIR" >> "$GITHUB_OUTPUT"
-          echo "project_root=$PROJECT_ROOT" >> "$GITHUB_OUTPUT"
-          echo "Detected Android project: $ANDROID_DIR"
+          echo "Android project: $ANDROID_DIR"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -93,12 +133,12 @@ jobs:
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: false
 
       - name: Install Android SDK 35 packages
         shell: bash
         run: |
           set -euo pipefail
+
           sdkmanager --install \
             'platform-tools' \
             'platforms;android-35' \
@@ -109,107 +149,181 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Install Python test dependencies
+        working-directory: ${{ steps.source.outputs.source_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-test.txt
+
+          python -c "import playwright; print('Playwright:', playwright.__version__)"
+
+      - name: Install Playwright Chromium
+        working-directory: ${{ steps.source.outputs.source_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m playwright install --with-deps chromium
+          python -m playwright --version
+
       - name: Verify source integrity and synchronized assets
-        working-directory: ${{ steps.android.outputs.project_root }}
+        working-directory: ${{ steps.source.outputs.source_root }}
         shell: bash
         run: |
           set -euo pipefail
           python scripts/verify-source.py
 
-      - name: Check JavaScript syntax and backend script
-        working-directory: ${{ steps.android.outputs.project_root }}
+      - name: Check JavaScript syntax and backend
+        working-directory: ${{ steps.source.outputs.source_root }}
         shell: bash
         run: |
           set -euo pipefail
+
           node --check app.js
           node --check www/app.js
           node --check backend/server.js
+
           npm --prefix backend run check
 
       - name: Run JavaScript regression tests
-        working-directory: ${{ steps.android.outputs.project_root }}
+        working-directory: ${{ steps.source.outputs.source_root }}
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
-          TESTS=(scripts/test-*.js tests/test-*.js test-gemini-instruction-engine.js)
+
+          TESTS=(
+            scripts/test-*.js
+            tests/test-*.js
+            test-gemini-instruction-engine.js
+          )
+
           COUNT=0
-          for test_file in "${TESTS[@]}"; do
-            [ -f "$test_file" ] || continue
-            echo "::group::$(basename "$test_file")"
-            node "$test_file"
+
+          for TEST in "${TESTS[@]}"; do
+            [ -f "$TEST" ] || continue
+
+            echo "::group::$TEST"
+            node "$TEST"
             echo "::endgroup::"
+
             COUNT=$((COUNT + 1))
           done
-          echo "Passed JavaScript test files: $COUNT"
+
+          echo "JavaScript test files passed: $COUNT"
+
           if [ "$COUNT" -ne 120 ]; then
-            echo "ERROR: Expected 120 JavaScript test files; found $COUNT."
+            echo "::error::Expected 120 JavaScript tests, found $COUNT."
             exit 1
           fi
 
-      - name: Run Python regression tests
-        working-directory: ${{ steps.android.outputs.project_root }}
+      - name: Run Python browser regression tests
+        working-directory: ${{ steps.source.outputs.source_root }}
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
+
           TESTS=(scripts/test-*.py)
           COUNT=0
-          for test_file in "${TESTS[@]}"; do
-            echo "Running $test_file"
-            python "$test_file"
+
+          for TEST in "${TESTS[@]}"; do
+            echo "::group::$TEST"
+            python "$TEST"
+            echo "::endgroup::"
+
             COUNT=$((COUNT + 1))
           done
-          echo "Passed Python test files: $COUNT"
+
+          echo "Python test files passed: $COUNT"
+
           if [ "$COUNT" -ne 5 ]; then
-            echo "ERROR: Expected 5 Python test files; found $COUNT."
+            echo "::error::Expected 5 Python tests, found $COUNT."
             exit 1
           fi
 
-      - name: Build Android debug APK using installed Gradle
-        working-directory: ${{ steps.android.outputs.project_root }}
+      - name: Build Android debug APK
+        working-directory: ${{ steps.source.outputs.source_root }}
         shell: bash
+        env:
+          ANDROID_DIR: ${{ steps.android.outputs.android_dir }}
         run: |
           set -euo pipefail
+
           gradle --version
-          gradle --no-daemon --stacktrace --warning-mode all \
-            -p "${{ steps.android.outputs.android_dir }}" \
+
+          gradle \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all \
+            -p "$ANDROID_DIR" \
             clean assembleDebug
 
       - name: Verify APK and generate SHA256
         id: apk
-        working-directory: ${{ steps.android.outputs.project_root }}
+        working-directory: ${{ steps.source.outputs.source_root }}
         shell: bash
+        env:
+          ANDROID_DIR: ${{ steps.android.outputs.android_dir }}
         run: |
           set -euo pipefail
-          APK="${{ steps.android.outputs.android_dir }}/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
+
+          APK="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "::error::APK was not generated."
+            exit 1
+          fi
 
           mkdir -p release
-          cp "$APK" release/SONGDNA-6.1.0-Stage153-debug.apk
-          SHA256="$(sha256sum release/SONGDNA-6.1.0-Stage153-debug.apk | awk '{print $1}')"
-          echo "$SHA256  SONGDNA-6.1.0-Stage153-debug.apk" > release/SHA256SUMS.txt
+
+          cp "$APK" \
+            release/SONGDNA-6.1.0-Stage155-debug.apk
+
+          SHA256="$(
+            sha256sum release/SONGDNA-6.1.0-Stage155-debug.apk |
+            awk '{print $1}'
+          )"
+
+          echo "$SHA256  SONGDNA-6.1.0-Stage155-debug.apk" \
+            > release/SHA256SUMS.txt
+
           echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
 
           {
-            echo "## SONGDNA SMART STUDIO 6.1.0 — Stage153"
+            echo "## SONGDNA SMART STUDIO 6.1.0 - Stage155"
             echo ""
-            echo "- Source archive: exact Stage153 filename validated"
-            echo "- Android project: discovered from Gradle settings"
-            echo "- Gradle: 8.9 direct invocation; Gradle Wrapper not required"
-            echo "- JavaScript test files: 120 passed"
-            echo "- Python test files: 5 passed"
+            echo "- Source manifest: validated"
+            echo "- Source synchronization: passed"
+            echo "- JavaScript tests: 120 passed"
+            echo "- Python tests: 5 passed"
+            echo "- Playwright Chromium: installed"
+            echo "- Android Gradle build: successful"
             echo "- APK: generated and verified"
-            echo "- SHA-256: \`$SHA256\`"
+            echo "- SHA256: $SHA256"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Stage153 APK and checksum
+      - name: Upload Stage155 APK and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-6.1.0-Stage153-Android-APK
+          name: SONGDNA-6.1.0-Stage155-Android-APK
           path: |
-            ${{ steps.android.outputs.project_root }}/release/SONGDNA-6.1.0-Stage153-debug.apk
-            ${{ steps.android.outputs.project_root }}/release/SHA256SUMS.txt
+            ${{ steps.source.outputs.source_root }}/release/SONGDNA-6.1.0-Stage155-debug.apk
+            ${{ steps.source.outputs.source_root }}/release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
+
+      - name: Upload Gradle diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SONGDNA-Stage155-Build-Diagnostics
+          path: |
+            ${{ steps.source.outputs.source_root }}/android-wrapper/**/build/reports/
+            ${{ steps.source.outputs.source_root }}/android-wrapper/**/build/outputs/logs/
+          if-no-files-found: ignore
+          retention-days: 7
           
