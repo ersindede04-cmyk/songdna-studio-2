@@ -20,18 +20,19 @@ concurrency:
 jobs:
   build:
     name: Stage163 source validation and Android APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and validate exact Stage163 source archive
+      - name: Find and validate Stage163 source archive
         id: source
         shell: bash
         run: |
           set -euo pipefail
+
           ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_6_1_0_STAGE163_SOURCE.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
@@ -40,6 +41,7 @@ jobs:
           fi
 
           unzip -t "$ZIP_FILE"
+
           mkdir -p "$GITHUB_WORKSPACE/_stage163_source"
           unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/_stage163_source"
 
@@ -91,6 +93,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           python -m pip install --upgrade pip
           python -m pip install 'playwright==1.55.0'
           python -m playwright install --with-deps chromium
@@ -105,6 +108,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           sdkmanager --install \
             'platform-tools' \
             'platforms;android-35' \
@@ -127,9 +131,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           node --check app.js
           node --check www/app.js
           node --check backend/server.js
+
           npm --prefix backend run check
 
       - name: Run JavaScript regression tests
@@ -144,9 +150,11 @@ jobs:
 
           for test_file in "${TESTS[@]}"; do
             [ -f "$test_file" ] || continue
+
             echo "::group::$test_file"
             node "$test_file"
             echo "::endgroup::"
+
             COUNT=$((COUNT + 1))
           done
 
@@ -171,6 +179,7 @@ jobs:
             echo "::group::$test_file"
             python "$test_file"
             echo "::endgroup::"
+
             COUNT=$((COUNT + 1))
           done
 
@@ -205,6 +214,7 @@ jobs:
           test -s "$APK"
 
           mkdir -p release
+
           cp "$APK" release/SONGDNA-6.1.0-Stage163-debug.apk
 
           SHA256="$(sha256sum release/SONGDNA-6.1.0-Stage163-debug.apk | awk '{print $1}')"
