@@ -1,10 +1,11 @@
+
 name: SONGDNA SMART STUDIO Stage166 APK Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "SONGDNA_SMART_STUDIO_6_1_0_STAGE166_SOURCE.zip"
+      - "**/*STAGE166*.zip"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -21,16 +22,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2. Stage166 kaynak ZIP dosyasını kontrol et ve aç
+      # 2. Stage166 ZIP dosyasını depo içinde bul, kontrol et ve aç
       - name: Extract Stage166 source
         shell: bash
         run: |
-          ARCHIVE="SONGDNA_SMART_STUDIO_6_1_0_STAGE166_SOURCE.zip"
+          ARCHIVE="$(find . -type f -iname '*STAGE166*.zip' \
+            -not -path './.git/*' | sort | head -n 1)"
 
-          if [ ! -f "$ARCHIVE" ]; then
-            echo "::error::Stage166 ZIP file not found in repository root."
+          if [ -z "$ARCHIVE" ]; then
+            echo "::error::Stage166 ZIP file not found in repository."
+            echo "Repository ZIP files:"
+            find . -type f -iname '*.zip' -not -path './.git/*'
             exit 1
           fi
+
+          echo "Found archive: $ARCHIVE"
 
           unzip -t "$ARCHIVE"
 
@@ -41,7 +47,7 @@ jobs:
 
           if [ ! -d "$SOURCE_DIR" ]; then
             echo "::error::Stage166 source directory not found."
-            find _stage166_source -maxdepth 2 -type d
+            find _stage166_source -maxdepth 3 -type d
             exit 1
           fi
 
@@ -88,7 +94,7 @@ jobs:
           python scripts/ci-preflight.py
 
       # 9. Kaynak bütünlüğü ve Android/WebView senkronizasyonu
-      - name: Verify Stage166 source integrity
+      - name: Verify source integrity
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         run: |
           python scripts/verify-source.py
@@ -99,72 +105,7 @@ jobs:
         run: |
           node scripts/test-stage163-universal-content-standard.js
 
-      # 11. Stage166 arayüz ve menü sırası kontrolü
-      - name: Verify Stage166 interface completion
-        working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import re
-
-          html = Path("index.html").read_text(encoding="utf-8")
-          app = Path("app.js").read_text(encoding="utf-8")
-
-          required_switches = [
-              "traditionalMusicEnabled",
-              "modernMusicEnabled",
-              "pureTraditionalProduction"
-          ]
-
-          for item in required_switches:
-              pattern = rf'<input[^>]*id="{item}"[^>]*role="switch"'
-              if not re.search(pattern, html):
-                  raise SystemExit(f"Missing accessible switch: {item}")
-
-          if "prefers-reduced-motion:reduce" not in html:
-              raise SystemExit("Reduced-motion support missing.")
-
-          if "songdna_app_language" not in app:
-              raise SystemExit("Application language preference missing.")
-
-          nav_start = html.find('<nav')
-          nav_end = html.find('</nav>', nav_start)
-
-          if nav_start < 0 or nav_end < 0:
-              raise SystemExit("Drawer navigation not found.")
-
-          nav = html[nav_start:nav_end]
-
-          about = nav.find('data-drawer-target="aboutPanel"')
-          exit_button = nav.find('id="exitApp"')
-
-          if about < 0 or exit_button < 0:
-              raise SystemExit("About or Exit menu item missing.")
-
-          if about >= exit_button:
-              raise SystemExit("About must appear immediately before Exit.")
-
-          buttons = re.findall(r'<button\b[^>]*>', nav)
-
-          if not buttons or 'id="exitApp"' not in buttons[-1]:
-              raise SystemExit("Exit must be the last menu item.")
-
-          if not re.search(
-              r'data-drawer-target="aboutPanel"[^>]*>.*?</button>\s*'
-              r'<button[^>]*id="exitApp"',
-              nav,
-              re.S
-          ):
-              raise SystemExit("About must be immediately before Exit.")
-
-          print("PASS: Stage166 interface controls and menu order.")
-          PY
-
-      # 12. JavaScript regresyon testleri
-      # Stage164 ve Stage166 eski iki testin menü/manifest
-      # beklentileri güncel Stage166 kaynaklarıyla çelişiyor.
-      # Bu iki test, ilgili beklentiler güncellenene kadar hariç tutulur.
+      # 11. Tüm JavaScript regresyon testleri
       - name: Run JavaScript regression tests
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         shell: bash
@@ -177,20 +118,17 @@ jobs:
             count=$((count + 1))
           done < <(
             find tests scripts -maxdepth 1 \
-              -type f -name 'test-*.js' \
-              ! -name 'test-stage164-editorial-standard.js' \
-              ! -name 'test-stage166-interface-completion.js' \
-              | sort
+              -type f -name 'test-*.js' | sort
           )
 
-          echo "JavaScript test files executed: $count"
+          echo "JavaScript test files: $count"
 
-          if [ "$count" -ne 124 ]; then
-            echo "::error::Expected 124 compatible JavaScript test files."
+          if [ "$count" -ne 126 ]; then
+            echo "::error::Expected 126 JavaScript test files."
             exit 1
           fi
 
-      # 13. Python regresyon testleri
+      # 12. Python regresyon testleri
       - name: Run Python regression tests
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         shell: bash
@@ -213,13 +151,13 @@ jobs:
             exit 1
           fi
 
-      # 14. Backend kontrolü
+      # 13. Backend kontrolü
       - name: Check backend JavaScript
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         run: |
           npm --prefix backend run check
 
-      # 15. Android proje kimliği
+      # 14. Android proje kimliği
       - name: Verify Android project
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         shell: bash
@@ -243,32 +181,32 @@ jobs:
 
           echo "Stage166 Android project identity verified."
 
-      # 16. Android SDK kurulumu
+      # 15. Android SDK kurulumu
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
 
-      # 17. Android 35 platform ve build tools
+      # 16. Android 35 platform ve build tools
       - name: Install Android build components
         run: |
           sdkmanager \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # 18. Gradle 8.9
+      # 17. Gradle 8.9
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
-      # 19. APK derleme
+      # 18. Android APK derleme
       - name: Build Android debug APK
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166/android-wrapper
         run: |
           gradle clean assembleDebug --no-daemon
 
-      # 20. APK dosyasını hazırla
+      # 19. APK dosyasını hazırla
       - name: Prepare Stage166 APK release
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         shell: bash
@@ -289,7 +227,7 @@ jobs:
 
           ls -lh release/
 
-      # 21. APK ve SHA256 dosyasını GitHub'a yükle
+      # 20. APK ve SHA256 dosyasını GitHub'a yükle
       - name: Upload Stage166 APK
         uses: actions/upload-artifact@v4
         with:
