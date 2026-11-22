@@ -18,73 +18,91 @@ jobs:
     timeout-minutes: 45
 
     steps:
+      # 1. GitHub deposunu al
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check Stage164 source archive
+      # 2. Stage164 kaynak ZIP dosyasını kontrol et ve aç
+      - name: Extract Stage164 source
         shell: bash
         run: |
           ARCHIVE="SONGDNA_SMART_STUDIO_6_1_0_STAGE164_SOURCE.zip"
 
           if [ ! -f "$ARCHIVE" ]; then
-            echo "::error::Stage164 ZIP archive not found in repository root."
+            echo "::error::Stage164 ZIP file not found in repository root."
             exit 1
           fi
 
-          mkdir -p _stage164_source
           unzip -t "$ARCHIVE"
+
+          mkdir -p _stage164_source
           unzip -q "$ARCHIVE" -d _stage164_source
 
           if [ ! -d "_stage164_source/songdna95" ]; then
-            echo "::error::Expected songdna95 source directory not found."
+            echo "::error::songdna95 source directory not found."
             exit 1
           fi
 
-          echo "Stage164 source archive extracted successfully."
+          echo "Stage164 source extracted successfully."
 
+      # 3. Java 17
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
+      # 4. Node.js 22
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
+      # 5. Python 3.11
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 6. Python test bağımlılıkları
       - name: Install Python test dependencies
         working-directory: _stage164_source/songdna95
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-test.txt
 
+      # 7. Playwright Chromium
       - name: Install Playwright Chromium
         working-directory: _stage164_source/songdna95
         run: |
           python -m playwright install --with-deps chromium
 
+      # 8. Playwright sürüm kontrolü
       - name: Verify Playwright installation
         working-directory: _stage164_source/songdna95
         run: |
           python scripts/ci-preflight.py
 
+      # 9. Kaynak bütünlüğü ve Android/WebView senkronizasyonu
+      - name: Verify source integrity
+        working-directory: _stage164_source/songdna95
+        run: |
+          python scripts/verify-source.py
+
+      # 10. Stage164 şarkı sözü standardı
       - name: Verify Stage164 editorial standard
         working-directory: _stage164_source/songdna95
         run: |
           node tests/test-stage164-editorial-standard.js
 
+      # 11. Stage163 evrensel müzik standardı
       - name: Verify Stage163 universal content standard
         working-directory: _stage164_source/songdna95
         run: |
           node scripts/test-stage163-universal-content-standard.js
 
-      - name: Run all JavaScript regression tests
+      # 12. Tüm JavaScript regresyon testleri
+      - name: Run JavaScript regression tests
         working-directory: _stage164_source/songdna95
         shell: bash
         run: |
@@ -94,17 +112,20 @@ jobs:
             echo "Running: $file"
             node "$file"
             count=$((count + 1))
-          done < <(find tests scripts -maxdepth 1 -type f \
-            -name 'test-*.js' | sort)
+          done < <(
+            find tests scripts -maxdepth 1 \
+              -type f -name 'test-*.js' | sort
+          )
 
-          echo "JavaScript test files executed: $count"
+          echo "JavaScript test files: $count"
 
           if [ "$count" -ne 124 ]; then
             echo "::error::Expected 124 JavaScript test files."
             exit 1
           fi
 
-      - name: Run Python browser regression tests
+      # 13. Python regresyon testleri
+      - name: Run Python regression tests
         working-directory: _stage164_source/songdna95
         shell: bash
         run: |
@@ -114,23 +135,28 @@ jobs:
             echo "Running: $file"
             python "$file"
             count=$((count + 1))
-          done < <(find scripts -maxdepth 1 -type f \
-            -name 'test-*.py' | sort)
+          done < <(
+            find scripts -maxdepth 1 \
+              -type f -name 'test-*.py' | sort
+          )
 
-          echo "Python test files executed: $count"
+          echo "Python test files: $count"
 
           if [ "$count" -ne 5 ]; then
             echo "::error::Expected 5 Python test files."
             exit 1
           fi
 
+      # 14. Backend kontrolü
       - name: Check backend JavaScript
         working-directory: _stage164_source/songdna95
         run: |
           npm --prefix backend run check
 
-      - name: Check Android project files
+      # 15. Android proje kimliği
+      - name: Verify Android project
         working-directory: _stage164_source/songdna95
+        shell: bash
         run: |
           test -f android-wrapper/settings.gradle.kts
           test -f android-wrapper/build.gradle.kts
@@ -148,19 +174,33 @@ jobs:
 
           echo "Android project identity verified."
 
+      # 16. Android SDK kurulumu
+      # Eski tools paketi özellikle istenmiyor.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
+      # 17. Android 35 platform ve build tools
+      - name: Install Android build components
+        run: |
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      # 18. Gradle 8.9
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
+      # 19. APK derleme
       - name: Build Android debug APK
         working-directory: _stage164_source/songdna95/android-wrapper
         run: |
           gradle clean assembleDebug --no-daemon
 
+      # 20. APK dosyasını hazırla
       - name: Prepare APK release
         working-directory: _stage164_source/songdna95
         shell: bash
@@ -170,16 +210,18 @@ jobs:
           APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -f "$APK" ]; then
-            echo "::error::APK file was not generated."
+            echo "::error::APK was not generated."
             exit 1
           fi
 
-          cp "$APK" release/SONGDNA_SMART_STUDIO_6_1_0_STAGE164_DEBUG.apk
+          cp "$APK" \
+            release/SONGDNA_SMART_STUDIO_6_1_0_STAGE164_DEBUG.apk
 
           sha256sum release/*.apk > release/SHA256SUMS.txt
 
           ls -lh release/
 
+      # 21. APK ve SHA256 dosyasını yükle
       - name: Upload Stage164 APK
         uses: actions/upload-artifact@v4
         with:
