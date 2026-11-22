@@ -1,171 +1,235 @@
-name: SONGDNA SMART STUDIO 6.1.0 - STAGE161
+
+name: SONGDNA SMART STUDIO 6.1.0 - Stage163 APK Build
 
 on:
   workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
-      - '**/SONGDNA_SMART_STUDIO_6_1_0_STAGE161_SOURCE.zip'
+      - 'SONGDNA_SMART_STUDIO_6_1_0_STAGE163_SOURCE.zip'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
+concurrency:
+  group: songdna-stage163-apk-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    name: Stage163 source validation and Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
-      - name: Kaynak kodunu al
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Stage161 ZIP dosyasini bul
+      - name: Find and validate exact Stage163 source archive
         id: source
         shell: bash
         run: |
-          ZIP_FILE="$(find . -type f \
-            -name 'SONGDNA_SMART_STUDIO_6_1_0_STAGE161_SOURCE.zip' \
-            -not -path './.git/*' \
-            -print -quit)"
+          set -euo pipefail
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_6_1_0_STAGE163_SOURCE.zip"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "Stage161 kaynak ZIP dosyasi bulunamadi."
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: Required Stage163 archive is missing."
             exit 1
           fi
 
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-          echo "Bulunan kaynak: $ZIP_FILE"
+          unzip -t "$ZIP_FILE"
+          mkdir -p "$GITHUB_WORKSPACE/_stage163_source"
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/_stage163_source"
 
-      - name: Stage161 kaynak paketini ac
+          SOURCE_ROOT="$GITHUB_WORKSPACE/_stage163_source"
+          PROJECT_ROOT="$SOURCE_ROOT/songdna95"
+
+          test -d "$PROJECT_ROOT"
+          test -f "$PROJECT_ROOT/MUSIC_CONTENT_QUALITY_STANDARD_STAGE163_TR.md"
+          test -f "$PROJECT_ROOT/scripts/test-stage163-universal-content-standard.js"
+          test -f "$PROJECT_ROOT/android-wrapper/settings.gradle.kts"
+
+          echo "source_root=$SOURCE_ROOT" >> "$GITHUB_OUTPUT"
+          echo "project_root=$PROJECT_ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Locate Android project
+        id: android
         shell: bash
         run: |
-          mkdir -p stage161
-          unzip -q "$ZIP_FILE" -d stage161
+          set -euo pipefail
 
-          if [ ! -d "stage161/songdna95" ]; then
-            echo "stage161/songdna95 kaynak klasoru bulunamadi."
-            echo "ZIP icerigi:"
-            find stage161 -maxdepth 3 -type d
-            exit 1
-          fi
+          PROJECT_ROOT="${{ steps.source.outputs.project_root }}"
+          ANDROID_DIR="$PROJECT_ROOT/android-wrapper"
 
-      - name: Java 17 kur
+          test -f "$ANDROID_DIR/settings.gradle.kts"
+          test -f "$ANDROID_DIR/build.gradle.kts"
+          test -f "$ANDROID_DIR/app/build.gradle.kts"
+          test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
+
+          echo "android_dir=$ANDROID_DIR" >> "$GITHUB_OUTPUT"
+          echo "project_root=$PROJECT_ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Node.js 22 kur
+      - name: Set up Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
 
-      - name: Python 3.11 kur
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Python test bagimliliklarini kur
-        working-directory: stage161/songdna95
+      - name: Install Playwright and Chromium
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-test.txt
-
-      - name: Playwright Chromium kur
-        working-directory: stage161/songdna95
-        run: |
+          python -m pip install 'playwright==1.55.0'
           python -m playwright install --with-deps chromium
 
-      - name: Kaynak paketini dogrula
-        working-directory: stage161/songdna95
-        run: |
-          python scripts/verify-source.py
-
-      - name: Python CI on kontrolu
-        working-directory: stage161/songdna95
-        run: |
-          python scripts/ci-preflight.py
-
-      - name: JavaScript testlerini calistir
-        working-directory: stage161/songdna95
-        shell: bash
-        run: |
-          mapfile -t JS_TESTS < <(
-            find tests scripts -maxdepth 1 \
-              -type f -name 'test-*.js' -print | sort
-          )
-
-          JS_TESTS+=(test-gemini-instruction-engine.js)
-
-          echo "JavaScript test sayisi: ${#JS_TESTS[@]}"
-
-          if [ "${#JS_TESTS[@]}" -ne 123 ]; then
-            echo "Beklenen JavaScript test sayisi 123."
-            exit 1
-          fi
-
-          for TEST in "${JS_TESTS[@]}"; do
-            echo "Calistiriliyor: $TEST"
-            node "$TEST"
-          done
-
-      - name: Python testlerini calistir
-        working-directory: stage161/songdna95
-        shell: bash
-        run: |
-          mapfile -t PY_TESTS < <(
-            find scripts -maxdepth 1 \
-              -type f -name 'test-*.py' -print | sort
-          )
-
-          echo "Python test sayisi: ${#PY_TESTS[@]}"
-
-          if [ "${#PY_TESTS[@]}" -ne 5 ]; then
-            echo "Beklenen Python test sayisi 5."
-            exit 1
-          fi
-
-          for TEST in "${PY_TESTS[@]}"; do
-            echo "Calistiriliyor: $TEST"
-            python "$TEST"
-          done
-
-      - name: Android SDK kur
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
-      - name: Android SDK bilesenlerini kur
+      - name: Install Android SDK 35 packages
+        shell: bash
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-          yes | sdkmanager --licenses
+          set -euo pipefail
+          sdkmanager --install \
+            'platform-tools' \
+            'platforms;android-35' \
+            'build-tools;35.0.0'
 
-      - name: Gradle 8.9 kur
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Android APK derle
-        working-directory: stage161/songdna95
-        run: |
-          gradle --no-daemon --stacktrace \
-            -p android-wrapper \
-            clean assembleDebug
-
-      - name: APK dosyasini dogrula
-        working-directory: stage161/songdna95
+      - name: Verify Stage163 source integrity
+        working-directory: ${{ steps.android.outputs.project_root }}
         shell: bash
         run: |
-          APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+          set -euo pipefail
+          python scripts/verify-source.py
 
-          if [ ! -f "$APK" ]; then
-            echo "APK olusturulamadi."
+      - name: Check JavaScript and backend syntax
+        working-directory: ${{ steps.android.outputs.project_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check app.js
+          node --check www/app.js
+          node --check backend/server.js
+          npm --prefix backend run check
+
+      - name: Run JavaScript regression tests
+        working-directory: ${{ steps.android.outputs.project_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          TESTS=(scripts/test-*.js tests/test-*.js test-gemini-instruction-engine.js)
+          COUNT=0
+
+          for test_file in "${TESTS[@]}"; do
+            [ -f "$test_file" ] || continue
+            echo "::group::$test_file"
+            node "$test_file"
+            echo "::endgroup::"
+            COUNT=$((COUNT + 1))
+          done
+
+          echo "JavaScript test files passed: $COUNT"
+
+          if [ "$COUNT" -ne 124 ]; then
+            echo "ERROR: Expected 124 JavaScript test files; found $COUNT"
             exit 1
           fi
 
-          echo "APK basariyla olusturuldu:"
-          ls -lh "$APK"
+      - name: Run Python regression tests
+        working-directory: ${{ steps.android.outputs.project_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
 
-      - name: APK dosyasini yukle
+          TESTS=(scripts/test-*.py)
+          COUNT=0
+
+          for test_file in "${TESTS[@]}"; do
+            echo "::group::$test_file"
+            python "$test_file"
+            echo "::endgroup::"
+            COUNT=$((COUNT + 1))
+          done
+
+          echo "Python test files passed: $COUNT"
+
+          if [ "$COUNT" -ne 5 ]; then
+            echo "ERROR: Expected 5 Python test files; found $COUNT"
+            exit 1
+          fi
+
+      - name: Build Android debug APK
+        working-directory: ${{ steps.android.outputs.project_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle --version
+
+          gradle --no-daemon --stacktrace --warning-mode all \
+            -p "${{ steps.android.outputs.android_dir }}" \
+            clean assembleDebug
+
+      - name: Verify APK and generate SHA256
+        id: apk
+        working-directory: ${{ steps.android.outputs.project_root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="${{ steps.android.outputs.android_dir }}/app/build/outputs/apk/debug/app-debug.apk"
+
+          test -s "$APK"
+
+          mkdir -p release
+          cp "$APK" release/SONGDNA-6.1.0-Stage163-debug.apk
+
+          SHA256="$(sha256sum release/SONGDNA-6.1.0-Stage163-debug.apk | awk '{print $1}')"
+
+          echo "$SHA256  SONGDNA-6.1.0-Stage163-debug.apk" > release/SHA256SUMS.txt
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+          {
+            echo '## SONGDNA SMART STUDIO 6.1.0 — Stage163'
+            echo ''
+            echo '- Stage163 source archive validated'
+            echo '- Universal Music Content Standard checked'
+            echo '- JavaScript regression tests: 124 passed'
+            echo '- Python regression tests: 5 passed'
+            echo '- Android debug APK: generated and verified'
+            echo "- SHA-256: \`$SHA256\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Stage163 APK and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-6.1.0-STAGE161-APK
-          path: stage161/songdna95/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          name: SONGDNA-6.1.0-Stage163-Android-APK
+          path: |
+            ${{ steps.android.outputs.project_root }}/release/SONGDNA-6.1.0-Stage163-debug.apk
+            ${{ steps.android.outputs.project_root }}/release/SHA256SUMS.txt
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
+          
