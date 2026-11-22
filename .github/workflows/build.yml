@@ -32,17 +32,21 @@ jobs:
           set -euo pipefail
 
           ZIP_FILE="$(find . -type f -name 'SONGDNA_SMART_STUDIO_6_1_0_STAGE168_KAYNAK.zip' -print -quit)"
+
           if [ -z "$ZIP_FILE" ]; then
-            echo "::error::SONGDNA_SMART_STUDIO_6_1_0_STAGE168_KAYNAK.zip was not found in the repository."
+            echo "::error::Stage168 source ZIP was not found."
             exit 1
           fi
 
           echo "Found source archive: $ZIP_FILE"
+
           unzip -t "$ZIP_FILE"
+
           mkdir -p "$RUNNER_TEMP/songdna-stage168"
           unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-stage168"
 
           ANDROID_DIR="$(find "$RUNNER_TEMP/songdna-stage168" -type f -name 'settings.gradle.kts' -path '*/android-wrapper/settings.gradle.kts' -print -quit | xargs -r dirname)"
+
           if [ -z "$ANDROID_DIR" ] || [ ! -f "$ANDROID_DIR/app/build.gradle.kts" ]; then
             echo "::error::Android project not found inside Stage168 ZIP."
             exit 1
@@ -58,14 +62,16 @@ jobs:
           java-version: "17"
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
 
       - name: Install Android SDK 35
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-          yes | sdkmanager --licenses >/dev/null
+
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -79,6 +85,7 @@ jobs:
           ANDROID_DIR: ${{ steps.source.outputs.android_dir }}
         run: |
           set -euo pipefail
+
           PROJECT_DIR="$(dirname "$ANDROID_DIR")"
 
           test -f "$PROJECT_DIR/BUILD_PACKAGE_MANIFEST_STAGE168.json"
@@ -99,6 +106,7 @@ jobs:
           ANDROID_DIR: ${{ steps.source.outputs.android_dir }}
         run: |
           set -euo pipefail
+
           gradle --no-daemon --stacktrace -p "$ANDROID_DIR" clean assembleDebug
 
       - name: Publish APK artifact
