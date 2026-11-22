@@ -1,24 +1,23 @@
 
-name: SONGDNA SMART STUDIO 6.1.0 - Stage167 Android APK
+name: SONGDNA SMART STUDIO 6.1.0 - Stage168 Android APK
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "**/SONGDNA_SMART_STUDIO_6_1_0_STAGE167_SOURCE-6.zip"
+      - "**/SONGDNA_SMART_STUDIO_6_1_0_STAGE168_KAYNAK.zip"
       - ".github/workflows/build.yml"
-      - ".github/workflows/songdna-stage167-android.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage167-android-${{ github.ref }}
+  group: songdna-stage168-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build-android:
-    name: Build Stage167 Android APK
+    name: Build Stage168 Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -26,27 +25,26 @@ jobs:
       - name: Get repository files
         uses: actions/checkout@v4
 
-      - name: Locate and extract Stage167 source ZIP
+      - name: Locate and extract Stage168 source ZIP
         id: source
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$(find . -type f -name 'SONGDNA_SMART_STUDIO_6_1_0_STAGE167_SOURCE-6.zip' -print -quit)"
+          ZIP_FILE="$(find . -type f -name 'SONGDNA_SMART_STUDIO_6_1_0_STAGE168_KAYNAK.zip' -print -quit)"
           if [ -z "$ZIP_FILE" ]; then
-            echo "::error::SONGDNA_SMART_STUDIO_6_1_0_STAGE167_SOURCE-6.zip was not found in the repository."
-            echo "Check that the Stage167 source ZIP is uploaded to this repository."
+            echo "::error::SONGDNA_SMART_STUDIO_6_1_0_STAGE168_KAYNAK.zip was not found in the repository."
             exit 1
           fi
 
           echo "Found source archive: $ZIP_FILE"
           unzip -t "$ZIP_FILE"
-          mkdir -p "$RUNNER_TEMP/songdna-stage167"
-          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-stage167"
+          mkdir -p "$RUNNER_TEMP/songdna-stage168"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-stage168"
 
-          ANDROID_DIR="$(find "$RUNNER_TEMP/songdna-stage167" -type f -name 'settings.gradle.kts' -path '*/android-wrapper/settings.gradle.kts' -print -quit | xargs -r dirname)"
+          ANDROID_DIR="$(find "$RUNNER_TEMP/songdna-stage168" -type f -name 'settings.gradle.kts' -path '*/android-wrapper/settings.gradle.kts' -print -quit | xargs -r dirname)"
           if [ -z "$ANDROID_DIR" ] || [ ! -f "$ANDROID_DIR/app/build.gradle.kts" ]; then
-            echo "::error::The Android project was not found inside the Stage167 ZIP."
+            echo "::error::Android project not found inside Stage168 ZIP."
             exit 1
           fi
 
@@ -75,7 +73,7 @@ jobs:
           gradle-version: "8.9"
           cache-disabled: false
 
-      - name: Check Stage167 source and Android configuration
+      - name: Check Stage168 source and Android configuration
         shell: bash
         env:
           ANDROID_DIR: ${{ steps.source.outputs.android_dir }}
@@ -83,7 +81,8 @@ jobs:
           set -euo pipefail
           PROJECT_DIR="$(dirname "$ANDROID_DIR")"
 
-          test -f "$PROJECT_DIR/BUILD_PACKAGE_MANIFEST_STAGE167.json"
+          test -f "$PROJECT_DIR/BUILD_PACKAGE_MANIFEST_STAGE168.json"
+          test -f "$PROJECT_DIR/QA_REPORT_6_1_0_STAGE168.md"
           test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
           test -f "$ANDROID_DIR/app/src/main/assets/www/index.html"
           test -f "$ANDROID_DIR/app/src/main/assets/www/app.js"
@@ -105,7 +104,7 @@ jobs:
       - name: Publish APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-6.1.0-STAGE167-DEBUG-APK
+          name: SONGDNA-SMART-STUDIO-6.1.0-STAGE168-DEBUG-APK
           path: ${{ steps.source.outputs.android_dir }}/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
