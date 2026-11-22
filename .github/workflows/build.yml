@@ -5,7 +5,8 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "**/SONGDNA_SMART_STUDIO_6_1_0_STAGE167_KAYNAK.zip"
+      - "**/SONGDNA_SMART_STUDIO_6_1_0_STAGE167_SOURCE-6.zip"
+      - ".github/workflows/build.yml"
       - ".github/workflows/songdna-stage167-android.yml"
 
 permissions:
@@ -31,13 +32,14 @@ jobs:
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$(find . -type f -name 'SONGDNA_SMART_STUDIO_6_1_0_STAGE167_KAYNAK.zip' -print -quit)"
+          ZIP_FILE="$(find . -type f -name 'SONGDNA_SMART_STUDIO_6_1_0_STAGE167_SOURCE-6.zip' -print -quit)"
           if [ -z "$ZIP_FILE" ]; then
-            echo "::error::SONGDNA_SMART_STUDIO_6_1_0_STAGE167_KAYNAK.zip was not found in the repository."
-            echo "Upload the Stage167 source ZIP to the repository, preferably its root folder."
+            echo "::error::SONGDNA_SMART_STUDIO_6_1_0_STAGE167_SOURCE-6.zip was not found in the repository."
+            echo "Check that the Stage167 source ZIP is uploaded to this repository."
             exit 1
           fi
 
+          echo "Found source archive: $ZIP_FILE"
           unzip -t "$ZIP_FILE"
           mkdir -p "$RUNNER_TEMP/songdna-stage167"
           unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-stage167"
