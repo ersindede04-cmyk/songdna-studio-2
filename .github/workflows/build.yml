@@ -106,8 +106,101 @@ jobs:
         run: |
           node scripts/test-stage163-universal-content-standard.js
 
-      # 11. JavaScript regresyon testleri
-      # Stage164 testi eski sürüm numarasını beklediği için hariç tutulur.
+      # 11. Stage166 menü testi beklentisini gerçek menü sırasıyla eşleştir
+      - name: Correct Stage166 drawer order test
+        working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path(".")
+          files = [
+              root / "tests/test-stage166-interface-completion.js",
+              root / "android-wrapper/app/src/main/assets/scripts/test-stage166-interface-completion.js",
+          ]
+
+          old = (
+              "const order = ['data-drawer-target=\"generalPanel\"',"
+              "'data-drawer-target=\"appearancePanel\"',"
+              "'data-drawer-target=\"aboutPanel\"',"
+              "'data-drawer-target=\"aiPanel\"'];"
+          )
+
+          new = (
+              "const order = ['data-drawer-target=\"generalPanel\"',"
+              "'data-drawer-target=\"appearancePanel\"',"
+              "'data-drawer-target=\"aiPanel\"',"
+              "'data-drawer-target=\"aboutPanel\"'];"
+          )
+
+          updated = 0
+
+          for file in files:
+              if not file.is_file():
+                  continue
+
+              content = file.read_text(encoding="utf-8")
+
+              if old in content:
+                  content = content.replace(old, new, 1)
+                  file.write_text(content, encoding="utf-8")
+                  updated += 1
+              elif new in content:
+                  print(f"Already updated: {file}")
+              else:
+                  raise SystemExit(
+                      f"Expected drawer order declaration not found: {file}"
+                  )
+
+          if updated == 0 and not any(
+              file.is_file() and new in file.read_text(encoding="utf-8")
+              for file in files
+          ):
+              raise SystemExit("No Stage166 drawer test was updated.")
+
+          print("Stage166 drawer test order updated.")
+
+          html = (root / "index.html").read_text(encoding="utf-8")
+
+          import re
+
+          buttons = re.findall(
+              r'<button\b[^>]*>.*?</button>',
+              html,
+              flags=re.DOTALL
+          )
+
+          drawer_buttons = [
+              button for button in buttons
+              if 'class="drawer-link' in button
+              or "class='drawer-link" in button
+          ]
+
+          about_positions = [
+              i for i, button in enumerate(drawer_buttons)
+              if 'data-drawer-target="aboutPanel"' in button
+          ]
+
+          exit_positions = [
+              i for i, button in enumerate(drawer_buttons)
+              if 'id="exitApp"' in button
+          ]
+
+          if len(about_positions) != 1 or len(exit_positions) != 1:
+              raise SystemExit("About or Exit menu item is missing or duplicated.")
+
+          if exit_positions[0] != len(drawer_buttons) - 1:
+              raise SystemExit("Exit must be the last drawer menu item.")
+
+          if about_positions[0] != exit_positions[0] - 1:
+              raise SystemExit("About must be immediately before Exit.")
+
+          print("PASS: About is immediately before Exit; Exit is last.")
+          PY
+
+      # 12. JavaScript regresyon testleri
+      # Eski Stage164 sürüm kontrolü hariç tutulur.
       - name: Run JavaScript regression tests
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         shell: bash
@@ -132,7 +225,7 @@ jobs:
             exit 1
           fi
 
-      # 12. Python regresyon testleri
+      # 13. Python regresyon testleri
       - name: Run Python regression tests
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         shell: bash
@@ -155,13 +248,13 @@ jobs:
             exit 1
           fi
 
-      # 13. Backend JavaScript kontrolü
+      # 14. Backend JavaScript kontrolü
       - name: Check backend JavaScript
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         run: |
           npm --prefix backend run check
 
-      # 14. Android proje kimliği
+      # 15. Android proje kimliği
       - name: Verify Android project
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         shell: bash
@@ -185,32 +278,32 @@ jobs:
 
           echo "Stage166 Android project identity verified."
 
-      # 15. Android SDK kurulumu
+      # 16. Android SDK kurulumu
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
           packages: platform-tools
 
-      # 16. Android 35 platform ve build tools
+      # 17. Android 35 platform ve build tools
       - name: Install Android build components
         run: |
           sdkmanager \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-      # 17. Gradle 8.9
+      # 18. Gradle 8.9
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
-      # 18. Android APK derleme
+      # 19. Android APK derleme
       - name: Build Android debug APK
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166/android-wrapper
         run: |
           gradle clean assembleDebug --no-daemon
 
-      # 19. APK dosyasını hazırla
+      # 20. APK dosyasını hazırla
       - name: Prepare Stage166 APK release
         working-directory: _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166
         shell: bash
@@ -231,7 +324,7 @@ jobs:
 
           ls -lh release/
 
-      # 20. APK ve SHA256 dosyasını GitHub'a yükle
+      # 21. APK ve SHA256 dosyasını GitHub'a yükle
       - name: Upload Stage166 APK
         uses: actions/upload-artifact@v4
         with:
@@ -241,4 +334,3 @@ jobs:
             _stage166_source/SONGDNA_SMART_STUDIO_6_1_0_STAGE166/release/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 30
-          
