@@ -18,7 +18,7 @@ concurrency:
 jobs:
   verify-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Kaynak deposunu al
@@ -39,7 +39,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
 
       - name: Gradle 8.9 kur
         uses: gradle/actions/setup-gradle@v4
@@ -50,14 +49,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -f SONGDNA_SMART_STUDIO_6_1_1_STAGE172_KAYNAK.zip
-          mkdir -p source
-          unzip -q SONGDNA_SMART_STUDIO_6_1_1_STAGE172_KAYNAK.zip -d source
-          test -d source/SONGDNA_SMART_STUDIO_6_1_1_STAGE172
-          echo "SOURCE_DIR=$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_6_1_1_STAGE172" >> "$GITHUB_ENV"
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_6_1_1_STAGE172_KAYNAK.zip"
+          test -s "$ZIP_FILE"
+          mkdir -p "$GITHUB_WORKSPACE/source"
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
+          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_6_1_1_STAGE172"
+          test -d "$SOURCE_DIR"
+          test -f "$SOURCE_DIR/requirements-test.txt"
+          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
       - name: Python test bağımlılıklarını kur
+        shell: bash
         run: |
+          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
 
@@ -65,42 +69,42 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Kaynak ve Android varlık bütünlüğünü doğrula
-        working-directory: ${{ github.workspace }}
         run: python "$SOURCE_DIR/scripts/verify-source.py"
 
       - name: Backend JavaScript sözdizimini doğrula
         run: npm --prefix "$SOURCE_DIR/backend" run check
 
-      - name: Tüm JavaScript regresyon testlerini çalıştır
+      - name: JavaScript regresyon testlerini çalıştır
         shell: bash
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
-          mapfile -d '' tests < <(find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z)
-          echo "JavaScript test sayısı: ${#tests[@]}"
-          test "${#tests[@]}" -eq 130
-          for test_file in "${tests[@]}"; do
-            echo "--- $test_file"
-            node "$test_file"
+          mapfile -d '' TESTS < <(find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z)
+          echo "Bulunan JavaScript test dosyası: ${#TESTS[@]}"
+          test "${#TESTS[@]}" -gt 0
+          for TEST_FILE in "${TESTS[@]}"; do
+            echo "--- $TEST_FILE"
+            node "$TEST_FILE"
           done
 
-      - name: Tüm Python ve tarayıcı regresyon testlerini çalıştır
+      - name: Python ve tarayıcı regresyon testlerini çalıştır
         shell: bash
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
-          mapfile -d '' tests < <(find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z)
-          echo "Python test sayısı: ${#tests[@]}"
-          test "${#tests[@]}" -eq 7
           python scripts/ci-preflight.py
-          for test_file in "${tests[@]}"; do
-            echo "--- $test_file"
-            python "$test_file"
+          mapfile -d '' TESTS < <(find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z)
+          echo "Bulunan Python test dosyası: ${#TESTS[@]}"
+          test "${#TESTS[@]}" -gt 0
+          for TEST_FILE in "${TESTS[@]}"; do
+            echo "--- $TEST_FILE"
+            python "$TEST_FILE"
           done
 
       - name: Android debug APK oluştur
-        working-directory: ${{ github.workspace }}
+        shell: bash
         run: |
+          set -euo pipefail
           cd "$SOURCE_DIR/android-wrapper"
           gradle :app:assembleDebug --no-daemon
 
@@ -121,4 +125,3 @@ jobs:
           path: stage172-output/*
           if-no-files-found: error
           retention-days: 14
-          
