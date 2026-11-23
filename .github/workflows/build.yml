@@ -19,7 +19,7 @@ jobs:
   build:
     name: Stage169 Source Verification and APK Build
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
       - name: Repository checkout
@@ -50,7 +50,7 @@ jobs:
           sdkmanager "platforms;android-35"
           sdkmanager "build-tools;35.0.0"
 
-      - name: Install Gradle
+      - name: Install Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
@@ -81,6 +81,8 @@ jobs:
 
           echo "SONGDNA_ROOT=$ROOT" >> "$GITHUB_ENV"
 
+          echo "PASS: Stage169 source ZIP validated"
+
       - name: Verify Stage169 package manifest
         shell: bash
         run: |
@@ -94,18 +96,29 @@ jobs:
           import json
           import sys
 
-          path = sys.argv[1]
-
-          with open(path, encoding="utf-8") as f:
+          with open(sys.argv[1], encoding="utf-8") as f:
               data = json.load(f)
 
-          assert data.get("package_stage") == 169, "Wrong package stage"
-          assert data.get("application_version") == "6.1.0", "Wrong app version"
-          assert data.get("android_application_id") == "com.songdna.studio", "Wrong application ID"
-          assert data.get("package_type") == "source_only", "Unexpected package type"
-          assert data.get("catalog_profile_count") == 75, "Unexpected catalog profile count"
+          expected = {
+              "package_stage": 169,
+              "application_version": "6.1.0",
+              "base_stage": 168,
+              "android_application_id": "com.songdna.studio",
+              "android_version_code": 32,
+              "android_version_name": "6.1.0",
+              "package_type": "source_only",
+              "catalog_profile_count": 75,
+              "apk_built": False
+          }
 
-          print("PASS: Stage169 package manifest verified")
+          for key, value in expected.items():
+              actual = data.get(key)
+              if actual != value:
+                  raise SystemExit(
+                      f"FAIL: {key}: expected {value!r}, got {actual!r}"
+                  )
+
+          print("PASS: Stage169 manifest verified")
           PY
 
       - name: Verify Android project structure
@@ -129,7 +142,7 @@ jobs:
           grep -q 'versionName = "6.1.0"' \
             "$ANDROID/app/build.gradle.kts"
 
-          echo "PASS: Android project structure and version"
+          echo "PASS: Android project structure verified"
 
       - name: Verify synchronized application files
         shell: bash
@@ -137,31 +150,27 @@ jobs:
           set -euo pipefail
 
           ROOT="$SONGDNA_ROOT"
-          WEB="$ROOT/www"
           ANDROID="$ROOT/android-wrapper/app/src/main/assets"
-          ANDROID_WEB="$ANDROID/www"
 
           for FILE in index.html app.js; do
             test -f "$ROOT/$FILE"
-            test -f "$WEB/$FILE"
+            test -f "$ROOT/www/$FILE"
             test -f "$ANDROID/$FILE"
-            test -f "$ANDROID_WEB/$FILE"
+            test -f "$ANDROID/www/$FILE"
 
-            cmp "$ROOT/$FILE" "$WEB/$FILE"
-            cmp "$WEB/$FILE" "$ANDROID/$FILE"
-            cmp "$WEB/$FILE" "$ANDROID_WEB/$FILE"
+            cmp "$ROOT/$FILE" "$ROOT/www/$FILE"
+            cmp "$ROOT/$FILE" "$ANDROID/$FILE"
+            cmp "$ROOT/$FILE" "$ANDROID/www/$FILE"
           done
 
-          echo "PASS: Main application files are synchronized"
+          echo "PASS: Web and Android application files synchronized"
 
       - name: Check JavaScript syntax
         shell: bash
         run: |
           set -euo pipefail
 
-          ROOT="$SONGDNA_ROOT"
-
-          find "$ROOT" \
+          find "$SONGDNA_ROOT" \
             -type f \
             -name "*.js" \
             -not -path "*/node_modules/*" \
@@ -172,33 +181,35 @@ jobs:
 
           echo "PASS: JavaScript syntax checks"
 
-      - name: Run Stage169 focused regression tests
+      - name: Run Stage169 regression tests
         shell: bash
         run: |
           set -euo pipefail
 
-          ROOT="$SONGDNA_ROOT"
+          SCRIPTS="$SONGDNA_ROOT/scripts"
 
           TESTS=(
-            "tests/test-stage166-interface-completion.js"
-            "tests/test-stage163-universal-content-standard.js"
-            "tests/test-stage165-pop-regional-production.js"
-            "tests/test-stage157-user-creative-input-fidelity.js"
-            "tests/test-stage160-multilingual-songwriting-standard.js"
-            "tests/test-stage161-28-language-profiles.js"
+            "test-stage166-interface-completion.js"
+            "test-stage163-universal-content-standard.js"
+            "test-stage157-user-creative-input-fidelity.js"
+            "test-stage160-multilingual-songwriting-standard.js"
+            "test-stage161-28-language-profiles.js"
+            "test-stage165-pop-regional-production.js"
           )
 
           for TEST in "${TESTS[@]}"; do
-            if [ ! -f "$ROOT/$TEST" ]; then
-              echo "::error::Missing regression test: $TEST"
+            FILE="$SCRIPTS/$TEST"
+
+            if [ ! -f "$FILE" ]; then
+              echo "::error::Missing regression test: scripts/$TEST"
               exit 1
             fi
 
-            echo "Running $TEST"
-            node "$ROOT/$TEST"
+            echo "Running scripts/$TEST"
+            node "$FILE"
           done
 
-          echo "PASS: Focused Stage169 regression tests"
+          echo "PASS: Stage169 regression tests"
 
       - name: Validate Android XML files
         shell: bash
@@ -214,7 +225,7 @@ jobs:
           files = list(root.rglob("*.xml"))
 
           if not files:
-              raise SystemExit("No Android XML files found")
+              raise SystemExit("FAIL: No Android XML files found")
 
           for file in files:
               ET.parse(file)
@@ -239,7 +250,11 @@ jobs:
           fi
 
           mkdir -p "$RUNNER_TEMP/songdna-output"
-          cp "$APK" "$RUNNER_TEMP/songdna-output/SONGDNA-SMART-STUDIO-6.1.0-STAGE169-DEBUG.apk"
+
+          cp "$APK" \
+            "$RUNNER_TEMP/songdna-output/SONGDNA-SMART-STUDIO-6.1.0-STAGE169-DEBUG.apk"
+
+          echo "PASS: Android Debug APK created"
 
       - name: Upload Stage169 APK
         uses: actions/upload-artifact@v4
