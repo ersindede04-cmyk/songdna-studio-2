@@ -26,13 +26,13 @@ jobs:
 
           mapfile -t ZIP_MATCHES < <(find . -type f -name "$ZIP_NAME" -not -path './.git/*' -print | sort)
           if [ "${#ZIP_MATCHES[@]}" -eq 0 ]; then
-            echo "::error::Stage171 kaynak ZIP bulunamadı. ZIP dosyasını workflow ile aynı branch'e GitHub deposuna yükleyip commit edin."
+            echo "::error::Stage171 kaynak ZIP bulunamadı. ZIP dosyasını bu branch'teki GitHub deposuna yükleyip commit edin."
             echo "Depoda bulunan ZIP dosyaları:"
             find . -type f -iname '*.zip' -not -path './.git/*' -print || true
             exit 1
           fi
           if [ "${#ZIP_MATCHES[@]}" -ne 1 ]; then
-            echo "::error::Aynı Stage171 ZIP dosyasından birden fazla bulundu. Tek bir kopya bırakın."
+            echo "::error::Aynı Stage171 ZIP dosyasından birden fazla bulundu."
             printf '%s\n' "${ZIP_MATCHES[@]}"
             exit 1
           fi
@@ -47,11 +47,8 @@ jobs:
           unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
 
           PROJECT_DIR="$EXTRACT_DIR/SONGDNA_SMART_STUDIO_6_1_0_STAGE171"
-          if [ ! -d "$PROJECT_DIR" ]; then
-            echo "::error::ZIP içindeki beklenen proje klasörü bulunamadı."
-            find "$EXTRACT_DIR" -maxdepth 3 -type d -print
-            exit 1
-          fi
+          test -d "$PROJECT_DIR"
+          test -f "$PROJECT_DIR/requirements-test.txt"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
           echo "Stage171 kaynak klasörü hazır: $PROJECT_DIR"
@@ -65,10 +62,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
-          cache-dependency-path: ${{ steps.source.outputs.project_dir }}/requirements-test.txt
 
-      - name: Verify Stage171 source, manifests and WebView synchronization
+      - name: Verify Stage171 source and synchronization
         env:
           PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         shell: bash
@@ -79,7 +74,7 @@ jobs:
           node --check backend/server.js
           python scripts/verify-source.py
 
-      - name: Run all JavaScript regression tests
+      - name: Run JavaScript regression tests
         env:
           PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         shell: bash
@@ -87,9 +82,9 @@ jobs:
           set -euo pipefail
           cd "$PROJECT_DIR"
           mapfile -t TEST_FILES < <(find tests scripts -maxdepth 1 -type f -name 'test-*.js' -print | sort)
-          echo "Bulunan JavaScript test dosyası: ${#TEST_FILES[@]}"
+          echo "JavaScript test sayısı: ${#TEST_FILES[@]}"
           if [ "${#TEST_FILES[@]}" -ne 129 ]; then
-            echo "::error::Kaynak envanteri 129 JavaScript testi bekliyor; bulunan: ${#TEST_FILES[@]}"
+            echo "::error::129 JavaScript testi bekleniyordu."
             exit 1
           fi
           for TEST_FILE in "${TEST_FILES[@]}"; do
@@ -97,7 +92,7 @@ jobs:
             node "$TEST_FILE"
           done
 
-      - name: Install pinned Python test dependencies and Chromium
+      - name: Install Python dependencies and Chromium
         env:
           PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         shell: bash
@@ -107,7 +102,7 @@ jobs:
           python -m pip install -r "$PROJECT_DIR/requirements-test.txt"
           python -m playwright install --with-deps chromium
 
-      - name: Run Python preflight and all browser regression tests
+      - name: Run Python and browser regression tests
         env:
           PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
         shell: bash
@@ -116,9 +111,9 @@ jobs:
           cd "$PROJECT_DIR"
           python scripts/ci-preflight.py
           mapfile -t TEST_FILES < <(find scripts -maxdepth 1 -type f -name 'test-*.py' -print | sort)
-          echo "Bulunan Python test dosyası: ${#TEST_FILES[@]}"
+          echo "Python test sayısı: ${#TEST_FILES[@]}"
           if [ "${#TEST_FILES[@]}" -ne 7 ]; then
-            echo "::error::Stage171 kaynak envanteri 7 Python testi bekliyor; bulunan: ${#TEST_FILES[@]}"
+            echo "::error::7 Python testi bekleniyordu."
             exit 1
           fi
           for TEST_FILE in "${TEST_FILES[@]}"; do
@@ -131,12 +126,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK 35 components
+      - name: Install Android SDK 35
         shell: bash
         run: |
           set -euo pipefail
@@ -157,9 +151,8 @@ jobs:
           gradle --no-daemon --stacktrace -p "$PROJECT_DIR/android-wrapper" clean assembleDebug
           APK="$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-          echo "APK successfully built: $APK"
 
-      - name: Upload Stage171 debug APK artifact
+      - name: Upload Stage171 APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-SMART-STUDIO-6.1.0-STAGE171-DEBUG-APK
@@ -167,4 +160,3 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           
-  
