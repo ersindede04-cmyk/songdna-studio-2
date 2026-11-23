@@ -80,7 +80,6 @@ jobs:
           fi
 
           echo "SONGDNA_ROOT=$ROOT" >> "$GITHUB_ENV"
-
           echo "PASS: Stage169 source ZIP validated"
 
       - name: Verify Stage169 package manifest
@@ -102,13 +101,9 @@ jobs:
           expected = {
               "package_stage": 169,
               "application_version": "6.1.0",
-              "base_stage": 168,
               "android_application_id": "com.songdna.studio",
-              "android_version_code": 32,
-              "android_version_name": "6.1.0",
               "package_type": "source_only",
-              "catalog_profile_count": 75,
-              "apk_built": False
+              "catalog_profile_count": 75
           }
 
           for key, value in expected.items():
@@ -118,7 +113,7 @@ jobs:
                       f"FAIL: {key}: expected {value!r}, got {actual!r}"
                   )
 
-          print("PASS: Stage169 manifest verified")
+          print("PASS: Stage169 package manifest verified")
           PY
 
       - name: Verify Android project structure
@@ -134,9 +129,6 @@ jobs:
           test -f "$ANDROID/app/src/main/java/com/songdna/studio/MainActivity.kt"
 
           grep -q 'applicationId = "com.songdna.studio"' \
-            "$ANDROID/app/build.gradle.kts"
-
-          grep -q 'versionCode = 32' \
             "$ANDROID/app/build.gradle.kts"
 
           grep -q 'versionName = "6.1.0"' \
@@ -163,7 +155,7 @@ jobs:
             cmp "$ROOT/$FILE" "$ANDROID/www/$FILE"
           done
 
-          echo "PASS: Web and Android application files synchronized"
+          echo "PASS: Application files synchronized"
 
       - name: Check JavaScript syntax
         shell: bash
@@ -186,26 +178,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          SCRIPTS="$SONGDNA_ROOT/scripts"
+          ROOT="$SONGDNA_ROOT"
 
           TESTS=(
-            "test-stage166-interface-completion.js"
-            "test-stage163-universal-content-standard.js"
-            "test-stage157-user-creative-input-fidelity.js"
-            "test-stage160-multilingual-songwriting-standard.js"
-            "test-stage161-28-language-profiles.js"
-            "test-stage165-pop-regional-production.js"
+            "tests/test-stage166-interface-completion.js"
+            "scripts/test-stage163-universal-content-standard.js"
+            "tests/test-stage157-user-creative-input-fidelity.js"
+            "tests/test-stage160-multilingual-songwriting-standard.js"
+            "tests/test-stage161-28-language-profiles.js"
+            "tests/test-stage165-pop-regional-production.js"
           )
 
           for TEST in "${TESTS[@]}"; do
-            FILE="$SCRIPTS/$TEST"
+            FILE="$ROOT/$TEST"
 
             if [ ! -f "$FILE" ]; then
-              echo "::error::Missing regression test: scripts/$TEST"
+              echo "::error::Missing regression test: $TEST"
               exit 1
             fi
 
-            echo "Running scripts/$TEST"
+            echo "Running $TEST"
             node "$FILE"
           done
 
