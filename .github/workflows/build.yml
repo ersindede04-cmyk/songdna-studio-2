@@ -19,7 +19,7 @@ concurrency:
 jobs:
   verify-and-build:
     name: Verify source and build Android debug APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
 
     steps:
@@ -83,6 +83,7 @@ jobs:
 
           SOURCE_DIR="$(find "$GITHUB_WORKSPACE/source" -type f \
             -name 'requirements-test.txt' -printf '%h\n' -quit)"
+
           test -n "$SOURCE_DIR"
           test -f "$SOURCE_DIR/scripts/verify-source.py"
           test -d "$SOURCE_DIR/android-wrapper"
@@ -111,9 +112,15 @@ jobs:
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
-          mapfile -d '' TESTS < <(find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z)
+
+          mapfile -d '' TESTS < <(
+            find tests scripts -maxdepth 1 -type f \
+              -name '*.js' -print0 | sort -z
+          )
+
           echo "JavaScript test files found: ${#TESTS[@]}"
           test "${#TESTS[@]}" -eq 130
+
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- Running $TEST_FILE"
             node "$TEST_FILE"
@@ -124,10 +131,17 @@ jobs:
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
+
           python scripts/ci-preflight.py
-          mapfile -d '' TESTS < <(find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z)
+
+          mapfile -d '' TESTS < <(
+            find scripts -maxdepth 1 -type f \
+              -name 'test-*.py' -print0 | sort -z
+          )
+
           echo "Python/browser test files found: ${#TESTS[@]}"
           test "${#TESTS[@]}" -eq 7
+
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- Running $TEST_FILE"
             python "$TEST_FILE"
@@ -144,12 +158,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+
           test -s "$APK"
+
           mkdir -p "$GITHUB_WORKSPACE/stage173-output"
-          cp "$APK" "$GITHUB_WORKSPACE/stage173-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE173_DEBUG.apk"
+
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/stage173-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE173_DEBUG.apk"
+
           cd "$GITHUB_WORKSPACE/stage173-output"
-          sha256sum SONGDNA_SMART_STUDIO_7_0_0_STAGE173_DEBUG.apk > SHA256SUMS.txt
+
+          sha256sum SONGDNA_SMART_STUDIO_7_0_0_STAGE173_DEBUG.apk \
+            > SHA256SUMS.txt
 
       - name: Upload Android debug APK artifact
         uses: actions/upload-artifact@v4
