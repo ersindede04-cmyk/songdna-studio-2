@@ -1,119 +1,251 @@
 
-name: SONGDNA SMART STUDIO 6.1.0 - Stage168 Android APK
+name: SONGDNA SMART STUDIO 6.1.0 - Stage169 Android APK
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - "**/SONGDNA_SMART_STUDIO_6_1_0_STAGE168_KAYNAK.zip"
+      - "SONGDNA_SMART_STUDIO_6_1_0_STAGE169_KAYNAK.zip"
       - ".github/workflows/build.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage168-android-${{ github.ref }}
+  group: songdna-stage169-apk
   cancel-in-progress: true
 
 jobs:
-  build-android:
-    name: Build Stage168 Android APK
+  build:
+    name: Stage169 Source Verification and APK Build
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
-      - name: Get repository files
+      - name: Repository checkout
         uses: actions/checkout@v4
 
-      - name: Locate and extract Stage168 source ZIP
-        id: source
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ZIP_FILE="$(find . -type f -name 'SONGDNA_SMART_STUDIO_6_1_0_STAGE168_KAYNAK.zip' -print -quit)"
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::Stage168 source ZIP was not found."
-            exit 1
-          fi
-
-          echo "Found source archive: $ZIP_FILE"
-
-          unzip -t "$ZIP_FILE"
-
-          mkdir -p "$RUNNER_TEMP/songdna-stage168"
-          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-stage168"
-
-          ANDROID_DIR="$(find "$RUNNER_TEMP/songdna-stage168" -type f -name 'settings.gradle.kts' -path '*/android-wrapper/settings.gradle.kts' -print -quit | xargs -r dirname)"
-
-          if [ -z "$ANDROID_DIR" ] || [ ! -f "$ANDROID_DIR/app/build.gradle.kts" ]; then
-            echo "::error::Android project not found inside Stage168 ZIP."
-            exit 1
-          fi
-
-          echo "android_dir=$ANDROID_DIR" >> "$GITHUB_OUTPUT"
-          echo "Android project: $ANDROID_DIR"
-
-      - name: Set up Java 17
+      - name: Install Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
+      - name: Install Node.js
+        uses: actions/setup-node@v4
         with:
-          packages: platform-tools
+          node-version: "20"
 
-      - name: Install Android SDK 35
-        shell: bash
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK packages
         run: |
-          set -euo pipefail
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-35"
+          sdkmanager "build-tools;35.0.0"
 
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
-
-      - name: Set up Gradle 8.9
+      - name: Install Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-          cache-disabled: false
 
-      - name: Check Stage168 source and Android configuration
+      - name: Validate Stage169 source ZIP
         shell: bash
-        env:
-          ANDROID_DIR: ${{ steps.source.outputs.android_dir }}
         run: |
           set -euo pipefail
 
-          PROJECT_DIR="$(dirname "$ANDROID_DIR")"
+          ZIP_FILE="SONGDNA_SMART_STUDIO_6_1_0_STAGE169_KAYNAK.zip"
 
-          test -f "$PROJECT_DIR/BUILD_PACKAGE_MANIFEST_STAGE168.json"
-          test -f "$PROJECT_DIR/QA_REPORT_6_1_0_STAGE168.md"
-          test -f "$ANDROID_DIR/app/src/main/AndroidManifest.xml"
-          test -f "$ANDROID_DIR/app/src/main/assets/www/index.html"
-          test -f "$ANDROID_DIR/app/src/main/assets/www/app.js"
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "::error::Stage169 source ZIP not found: $ZIP_FILE"
+            exit 1
+          fi
 
-          node --check "$ANDROID_DIR/app/src/main/assets/app.js"
-          node --check "$ANDROID_DIR/app/src/main/assets/www/app.js"
+          unzip -t "$ZIP_FILE"
 
-          grep -q 'applicationId = "com.songdna.studio"' "$ANDROID_DIR/app/build.gradle.kts"
-          grep -q 'versionName = "6.1.0"' "$ANDROID_DIR/app/build.gradle.kts"
+          mkdir -p "$RUNNER_TEMP/songdna-stage169"
+          unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/songdna-stage169"
 
-      - name: Build installable debug APK
+          ROOT="$RUNNER_TEMP/songdna-stage169/SONGDNA_SMART_STUDIO_6_1_0_STAGE169"
+
+          if [ ! -d "$ROOT" ]; then
+            echo "::error::Stage169 source directory not found"
+            exit 1
+          fi
+
+          echo "SONGDNA_ROOT=$ROOT" >> "$GITHUB_ENV"
+
+      - name: Verify Stage169 package manifest
         shell: bash
-        env:
-          ANDROID_DIR: ${{ steps.source.outputs.android_dir }}
         run: |
           set -euo pipefail
 
-          gradle --no-daemon --stacktrace -p "$ANDROID_DIR" clean assembleDebug
+          MANIFEST="$SONGDNA_ROOT/BUILD_PACKAGE_MANIFEST_STAGE169.json"
 
-      - name: Publish APK artifact
+          test -f "$MANIFEST"
+
+          python - "$MANIFEST" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, encoding="utf-8") as f:
+              data = json.load(f)
+
+          assert data.get("package_stage") == 169, "Wrong package stage"
+          assert data.get("application_version") == "6.1.0", "Wrong app version"
+          assert data.get("android_application_id") == "com.songdna.studio", "Wrong application ID"
+          assert data.get("package_type") == "source_only", "Unexpected package type"
+          assert data.get("catalog_profile_count") == 75, "Unexpected catalog profile count"
+
+          print("PASS: Stage169 package manifest verified")
+          PY
+
+      - name: Verify Android project structure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ANDROID="$SONGDNA_ROOT/android-wrapper"
+
+          test -f "$ANDROID/settings.gradle.kts"
+          test -f "$ANDROID/app/build.gradle.kts"
+          test -f "$ANDROID/app/src/main/AndroidManifest.xml"
+          test -f "$ANDROID/app/src/main/java/com/songdna/studio/MainActivity.kt"
+
+          grep -q 'applicationId = "com.songdna.studio"' \
+            "$ANDROID/app/build.gradle.kts"
+
+          grep -q 'versionCode = 32' \
+            "$ANDROID/app/build.gradle.kts"
+
+          grep -q 'versionName = "6.1.0"' \
+            "$ANDROID/app/build.gradle.kts"
+
+          echo "PASS: Android project structure and version"
+
+      - name: Verify synchronized application files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$SONGDNA_ROOT"
+          WEB="$ROOT/www"
+          ANDROID="$ROOT/android-wrapper/app/src/main/assets"
+          ANDROID_WEB="$ANDROID/www"
+
+          for FILE in index.html app.js; do
+            test -f "$ROOT/$FILE"
+            test -f "$WEB/$FILE"
+            test -f "$ANDROID/$FILE"
+            test -f "$ANDROID_WEB/$FILE"
+
+            cmp "$ROOT/$FILE" "$WEB/$FILE"
+            cmp "$WEB/$FILE" "$ANDROID/$FILE"
+            cmp "$WEB/$FILE" "$ANDROID_WEB/$FILE"
+          done
+
+          echo "PASS: Main application files are synchronized"
+
+      - name: Check JavaScript syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$SONGDNA_ROOT"
+
+          find "$ROOT" \
+            -type f \
+            -name "*.js" \
+            -not -path "*/node_modules/*" \
+            -print0 |
+          while IFS= read -r -d '' FILE; do
+            node --check "$FILE"
+          done
+
+          echo "PASS: JavaScript syntax checks"
+
+      - name: Run Stage169 focused regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="$SONGDNA_ROOT"
+
+          TESTS=(
+            "tests/test-stage166-interface-completion.js"
+            "tests/test-stage163-universal-content-standard.js"
+            "tests/test-stage165-pop-regional-production.js"
+            "tests/test-stage157-user-creative-input-fidelity.js"
+            "tests/test-stage160-multilingual-songwriting-standard.js"
+            "tests/test-stage161-28-language-profiles.js"
+          )
+
+          for TEST in "${TESTS[@]}"; do
+            if [ ! -f "$ROOT/$TEST" ]; then
+              echo "::error::Missing regression test: $TEST"
+              exit 1
+            fi
+
+            echo "Running $TEST"
+            node "$ROOT/$TEST"
+          done
+
+          echo "PASS: Focused Stage169 regression tests"
+
+      - name: Validate Android XML files
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - "$SONGDNA_ROOT/android-wrapper/app/src/main" <<'PY'
+          import pathlib
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = pathlib.Path(sys.argv[1])
+          files = list(root.rglob("*.xml"))
+
+          if not files:
+              raise SystemExit("No Android XML files found")
+
+          for file in files:
+              ET.parse(file)
+
+          print(f"PASS: {len(files)} Android XML files validated")
+          PY
+
+      - name: Build Android Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$SONGDNA_ROOT/android-wrapper"
+
+          gradle --no-daemon --stacktrace clean assembleDebug
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -f "$APK" ]; then
+            echo "::error::APK output not found"
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/songdna-output"
+          cp "$APK" "$RUNNER_TEMP/songdna-output/SONGDNA-SMART-STUDIO-6.1.0-STAGE169-DEBUG.apk"
+
+      - name: Upload Stage169 APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-6.1.0-STAGE168-DEBUG-APK
-          path: ${{ steps.source.outputs.android_dir }}/app/build/outputs/apk/debug/app-debug.apk
+          name: SONGDNA-SMART-STUDIO-6.1.0-STAGE169-DEBUG-APK
+          path: ${{ runner.temp }}/songdna-output/SONGDNA-SMART-STUDIO-6.1.0-STAGE169-DEBUG.apk
           if-no-files-found: error
           retention-days: 14
           
