@@ -1,230 +1,124 @@
 
-name: SONGDNA SMART STUDIO 6.1.0 Stage171 Android APK
+name: SONGDNA SMART STUDIO Stage172 Android Debug APK
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'SONGDNA_SMART_STUDIO_6_1_1_STAGE172_KAYNAK.zip'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
+concurrency:
+  group: songdna-stage172-android-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  build-android:
-    name: Verify uploaded Stage171 ZIP, test and build debug APK
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
+  verify-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
-      - name: Check out repository
+      - name: Kaynak deposunu al
         uses: actions/checkout@v4
 
-      - name: Find, validate and extract Stage171 source ZIP
-        id: source
-        shell: bash
-        run: |
-          set -euo pipefail
-          ZIP_NAME="SONGDNA_SMART_STUDIO_6_1_0_STAGE171_KAYNAK.zip"
-
-          mapfile -t ZIP_MATCHES < <(find . -type f -name "$ZIP_NAME" -not -path './.git/*' -print | sort)
-
-          if [ "${#ZIP_MATCHES[@]}" -eq 0 ]; then
-            echo "::error::Stage171 kaynak ZIP bulunamadı. ZIP dosyasını GitHub deposuna yükleyip commit edin."
-            find . -type f -iname '*.zip' -not -path './.git/*' -print || true
-            exit 1
-          fi
-
-          if [ "${#ZIP_MATCHES[@]}" -ne 1 ]; then
-            echo "::error::Birden fazla Stage171 ZIP bulundu."
-            printf '%s\n' "${ZIP_MATCHES[@]}"
-            exit 1
-          fi
-
-          ZIP_FILE="${ZIP_MATCHES[0]}"
-          echo "Kaynak ZIP bulundu: $ZIP_FILE"
-          unzip -t "$ZIP_FILE"
-
-          EXTRACT_DIR="$RUNNER_TEMP/songdna-stage171-source"
-          rm -rf "$EXTRACT_DIR"
-          mkdir -p "$EXTRACT_DIR"
-          unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
-
-          PROJECT_DIR="$EXTRACT_DIR/SONGDNA_SMART_STUDIO_6_1_0_STAGE171"
-
-          if [ ! -d "$PROJECT_DIR" ]; then
-            echo "::error::Stage171 proje klasörü bulunamadı."
-            find "$EXTRACT_DIR" -maxdepth 3 -type d -print
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT_DIR/requirements-test.txt" ]; then
-            echo "::error::requirements-test.txt bulunamadı."
-            exit 1
-          fi
-
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Node.js 22
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Verify Stage171 source and synchronization
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-          node --check app.js
-          node --check backend/server.js
-          python scripts/verify-source.py
-
-      - name: Run JavaScript regression tests
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          mapfile -t TEST_FILES < <(
-            find tests scripts -maxdepth 1 -type f -name 'test-*.js' -print | sort
-          )
-
-          echo "JavaScript test sayısı: ${#TEST_FILES[@]}"
-
-          if [ "${#TEST_FILES[@]}" -ne 129 ]; then
-            echo "::error::129 JavaScript testi bekleniyordu; bulunan: ${#TEST_FILES[@]}"
-            exit 1
-          fi
-
-          for TEST_FILE in "${TEST_FILES[@]}"; do
-            echo "===== $TEST_FILE ====="
-            node "$TEST_FILE"
-          done
-
-      - name: Install Python dependencies and Chromium
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -r "$PROJECT_DIR/requirements-test.txt"
-          python -m playwright install --with-deps chromium
-
-      - name: Run Python and browser regression tests
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          cd "$PROJECT_DIR"
-
-          python scripts/ci-preflight.py
-
-          mapfile -t TEST_FILES < <(
-            find scripts -maxdepth 1 -type f -name 'test-*.py' -print | sort
-          )
-
-          echo "Python test sayısı: ${#TEST_FILES[@]}"
-
-          if [ "${#TEST_FILES[@]}" -ne 7 ]; then
-            echo "::error::7 Python testi bekleniyordu; bulunan: ${#TEST_FILES[@]}"
-            exit 1
-          fi
-
-          for TEST_FILE in "${TEST_FILES[@]}"; do
-            echo "===== $TEST_FILE ====="
-            python "$TEST_FILE"
-          done
-
-      - name: Set up Java 17
+      - name: Java 17 kur
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Verify preinstalled Android SDK
-        shell: bash
-        run: |
-          set -euo pipefail
+      - name: Node.js 20 kur
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-          ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+      - name: Python 3.11 kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
 
-          if [ -z "$ANDROID_HOME" ]; then
-            echo "::error::Android SDK ortam değişkeni bulunamadı."
-            exit 1
-          fi
-
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-
-          if [ ! -x "$SDKMANAGER" ]; then
-            SDKMANAGER="$(
-              find "$ANDROID_HOME/cmdline-tools" \
-                -type f -name sdkmanager -perm -u+x 2>/dev/null \
-                | sort | tail -n 1
-            )"
-          fi
-
-          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
-            echo "::error::Android sdkmanager bulunamadı."
-            find "$ANDROID_HOME" -maxdepth 5 -name sdkmanager -print || true
-            exit 1
-          fi
-
-          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
-          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-          "$SDKMANAGER" --version
-
-      - name: Install required Android SDK packages
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          yes | "$SDKMANAGER" \
-            --sdk_root="$ANDROID_HOME" \
-            --licenses >/dev/null || true
-
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
-            "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
-
-      - name: Set up Gradle 8.9
+      - name: Gradle 8.9 kur
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Build Stage171 debug APK
-        env:
-          PROJECT_DIR: ${{ steps.source.outputs.project_dir }}
+      - name: Stage172 kaynak ZIP dosyasını aç
         shell: bash
         run: |
           set -euo pipefail
+          test -f SONGDNA_SMART_STUDIO_6_1_1_STAGE172_KAYNAK.zip
+          mkdir -p source
+          unzip -q SONGDNA_SMART_STUDIO_6_1_1_STAGE172_KAYNAK.zip -d source
+          test -d source/SONGDNA_SMART_STUDIO_6_1_1_STAGE172
+          echo "SOURCE_DIR=$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_6_1_1_STAGE172" >> "$GITHUB_ENV"
 
-          gradle --no-daemon --stacktrace \
-            -p "$PROJECT_DIR/android-wrapper" \
-            clean assembleDebug
+      - name: Python test bağımlılıklarını kur
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
 
-          APK="$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+      - name: Playwright Chromium kur
+        run: python -m playwright install --with-deps chromium
 
-          if [ ! -s "$APK" ]; then
-            echo "::error::APK oluşturulamadı veya dosya boş."
-            exit 1
-          fi
+      - name: Kaynak ve Android varlık bütünlüğünü doğrula
+        working-directory: ${{ github.workspace }}
+        run: python "$SOURCE_DIR/scripts/verify-source.py"
 
-          echo "Stage171 APK oluşturuldu: $APK"
+      - name: Backend JavaScript sözdizimini doğrula
+        run: npm --prefix "$SOURCE_DIR/backend" run check
 
-      - name: Upload Stage171 debug APK
+      - name: Tüm JavaScript regresyon testlerini çalıştır
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SOURCE_DIR"
+          mapfile -d '' tests < <(find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z)
+          echo "JavaScript test sayısı: ${#tests[@]}"
+          test "${#tests[@]}" -eq 130
+          for test_file in "${tests[@]}"; do
+            echo "--- $test_file"
+            node "$test_file"
+          done
+
+      - name: Tüm Python ve tarayıcı regresyon testlerini çalıştır
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$SOURCE_DIR"
+          mapfile -d '' tests < <(find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z)
+          echo "Python test sayısı: ${#tests[@]}"
+          test "${#tests[@]}" -eq 7
+          python scripts/ci-preflight.py
+          for test_file in "${tests[@]}"; do
+            echo "--- $test_file"
+            python "$test_file"
+          done
+
+      - name: Android debug APK oluştur
+        working-directory: ${{ github.workspace }}
+        run: |
+          cd "$SOURCE_DIR/android-wrapper"
+          gradle :app:assembleDebug --no-daemon
+
+      - name: APK ve SHA-256 doğrula
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+          test -s "$APK"
+          mkdir -p "$GITHUB_WORKSPACE/stage172-output"
+          cp "$APK" "$GITHUB_WORKSPACE/stage172-output/SONGDNA_SMART_STUDIO_6_1_1_STAGE172_DEBUG.apk"
+          sha256sum "$GITHUB_WORKSPACE/stage172-output/SONGDNA_SMART_STUDIO_6_1_1_STAGE172_DEBUG.apk" > "$GITHUB_WORKSPACE/stage172-output/SHA256SUMS.txt"
+
+      - name: Debug APK çıktısını yükle
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-6.1.0-STAGE171-DEBUG-APK
-          path: ${{ steps.source.outputs.project_dir }}/android-wrapper/app/build/outputs/apk/debug/app-debug.apk
+          name: SONGDNA-SMART-STUDIO-6.1.1-STAGE172-DEBUG-APK
+          path: stage172-output/*
           if-no-files-found: error
           retention-days: 14
           
