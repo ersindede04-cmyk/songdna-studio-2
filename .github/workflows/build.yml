@@ -14,7 +14,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - name: Check out repository (including uploaded source ZIP)
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Find, validate and extract Stage171 source ZIP
@@ -25,20 +25,21 @@ jobs:
           ZIP_NAME="SONGDNA_SMART_STUDIO_6_1_0_STAGE171_KAYNAK.zip"
 
           mapfile -t ZIP_MATCHES < <(find . -type f -name "$ZIP_NAME" -not -path './.git/*' -print | sort)
+
           if [ "${#ZIP_MATCHES[@]}" -eq 0 ]; then
-            echo "::error::Stage171 kaynak ZIP bulunamadı. ZIP dosyasını bu branch'teki GitHub deposuna yükleyip commit edin."
-            echo "Depoda bulunan ZIP dosyaları:"
+            echo "::error::Stage171 kaynak ZIP bulunamadı. ZIP dosyasını GitHub deposuna yükleyip commit edin."
             find . -type f -iname '*.zip' -not -path './.git/*' -print || true
             exit 1
           fi
+
           if [ "${#ZIP_MATCHES[@]}" -ne 1 ]; then
-            echo "::error::Aynı Stage171 ZIP dosyasından birden fazla bulundu."
+            echo "::error::Birden fazla Stage171 ZIP bulundu."
             printf '%s\n' "${ZIP_MATCHES[@]}"
             exit 1
           fi
 
           ZIP_FILE="${ZIP_MATCHES[0]}"
-          echo "Kaynak ZIP bulundu: ${ZIP_FILE}"
+          echo "Kaynak ZIP bulundu: $ZIP_FILE"
           unzip -t "$ZIP_FILE"
 
           EXTRACT_DIR="$RUNNER_TEMP/songdna-stage171-source"
@@ -47,11 +48,19 @@ jobs:
           unzip -q "$ZIP_FILE" -d "$EXTRACT_DIR"
 
           PROJECT_DIR="$EXTRACT_DIR/SONGDNA_SMART_STUDIO_6_1_0_STAGE171"
-          test -d "$PROJECT_DIR"
-          test -f "$PROJECT_DIR/requirements-test.txt"
+
+          if [ ! -d "$PROJECT_DIR" ]; then
+            echo "::error::Stage171 proje klasörü bulunamadı."
+            find "$EXTRACT_DIR" -maxdepth 3 -type d -print
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT_DIR/requirements-test.txt" ]; then
+            echo "::error::requirements-test.txt bulunamadı."
+            exit 1
+          fi
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-          echo "Stage171 kaynak klasörü hazır: $PROJECT_DIR"
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v4
@@ -81,12 +90,18 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-          mapfile -t TEST_FILES < <(find tests scripts -maxdepth 1 -type f -name 'test-*.js' -print | sort)
+
+          mapfile -t TEST_FILES < <(
+            find tests scripts -maxdepth 1 -type f -name 'test-*.js' -print | sort
+          )
+
           echo "JavaScript test sayısı: ${#TEST_FILES[@]}"
+
           if [ "${#TEST_FILES[@]}" -ne 129 ]; then
-            echo "::error::129 JavaScript testi bekleniyordu."
+            echo "::error::129 JavaScript testi bekleniyordu; bulunan: ${#TEST_FILES[@]}"
             exit 1
           fi
+
           for TEST_FILE in "${TEST_FILES[@]}"; do
             echo "===== $TEST_FILE ====="
             node "$TEST_FILE"
@@ -109,13 +124,20 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
+
           python scripts/ci-preflight.py
-          mapfile -t TEST_FILES < <(find scripts -maxdepth 1 -type f -name 'test-*.py' -print | sort)
+
+          mapfile -t TEST_FILES < <(
+            find scripts -maxdepth 1 -type f -name 'test-*.py' -print | sort
+          )
+
           echo "Python test sayısı: ${#TEST_FILES[@]}"
+
           if [ "${#TEST_FILES[@]}" -ne 7 ]; then
-            echo "::error::7 Python testi bekleniyordu."
+            echo "::error::7 Python testi bekleniyordu; bulunan: ${#TEST_FILES[@]}"
             exit 1
           fi
+
           for TEST_FILE in "${TEST_FILES[@]}"; do
             echo "===== $TEST_FILE ====="
             python "$TEST_FILE"
@@ -127,15 +149,51 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 35
+      - name: Verify preinstalled Android SDK
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-          yes | sdkmanager --licenses >/dev/null
+
+          ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+
+          if [ -z "$ANDROID_HOME" ]; then
+            echo "::error::Android SDK ortam değişkeni bulunamadı."
+            exit 1
+          fi
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(
+              find "$ANDROID_HOME/cmdline-tools" \
+                -type f -name sdkmanager -perm -u+x 2>/dev/null \
+                | sort | tail -n 1
+            )"
+          fi
+
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::Android sdkmanager bulunamadı."
+            find "$ANDROID_HOME" -maxdepth 5 -name sdkmanager -print || true
+            exit 1
+          fi
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          "$SDKMANAGER" --version
+
+      - name: Install required Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          yes | "$SDKMANAGER" \
+            --sdk_root="$ANDROID_HOME" \
+            --licenses >/dev/null || true
+
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -148,11 +206,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gradle --no-daemon --stacktrace -p "$PROJECT_DIR/android-wrapper" clean assembleDebug
-          APK="$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
 
-      - name: Upload Stage171 APK
+          gradle --no-daemon --stacktrace \
+            -p "$PROJECT_DIR/android-wrapper" \
+            clean assembleDebug
+
+          APK="$PROJECT_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "::error::APK oluşturulamadı veya dosya boş."
+            exit 1
+          fi
+
+          echo "Stage171 APK oluşturuldu: $APK"
+
+      - name: Upload Stage171 debug APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-SMART-STUDIO-6.1.0-STAGE171-DEBUG-APK
