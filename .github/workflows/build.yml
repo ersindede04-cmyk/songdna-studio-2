@@ -1,160 +1,146 @@
 
-name: SONGDNA SMART STUDIO 7.0.0 Stage173 Android APK
+name: SONGDNA SMART STUDIO 7.0.0 Stage175 Android Debug APK
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE173_DERLEME_KITI*.zip'
-      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE173_KAYNAK.zip'
+      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE175_KAYNAK.zip'
       - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-7-0-0-stage173-android-${{ github.ref }}
+  group: songdna-7-0-0-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify-and-build:
-    name: Verify source and build Android debug APK
+    name: Verify source and build Android APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
 
     steps:
-      - name: Check out repository
+      - name: Kaynak deposunu al
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Java 17 kur
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Node.js 20
+      - name: Node.js 20 kur
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Set up Python 3.11
+      - name: Python 3.11 kur
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Set up Gradle 8.9
+      - name: Gradle 8.9 kur
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Find and extract uploaded build kit or source ZIP
+      - name: Stage175 kaynak ZIP dosyasını aç
         shell: bash
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
 
-          KIT_ZIP=""
-          SOURCE_ZIP=""
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_KAYNAK.zip"
 
-          while IFS= read -r -d '' candidate; do
-            KIT_ZIP="$candidate"
-            break
-          done < <(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f \
-            -name 'SONGDNA_SMART_STUDIO_7_0_0_STAGE173_DERLEME_KITI*.zip' -print0)
+          test -s "$ZIP_FILE"
 
-          mkdir -p "$GITHUB_WORKSPACE/package-unpacked" "$GITHUB_WORKSPACE/source"
+          mkdir -p "$GITHUB_WORKSPACE/source"
 
-          if [[ -n "$KIT_ZIP" ]]; then
-            echo "Full build kit found: $(basename "$KIT_ZIP")"
-            unzip -q "$KIT_ZIP" -d "$GITHUB_WORKSPACE/package-unpacked"
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
 
-            while IFS= read -r -d '' candidate; do
-              SOURCE_ZIP="$candidate"
-              break
-            done < <(find "$GITHUB_WORKSPACE/package-unpacked" -type f \
-              -name 'SONGDNA_SMART_STUDIO_7_0_0_STAGE173_KAYNAK.zip' -print0)
-          else
-            SOURCE_ZIP="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_0_0_STAGE173_KAYNAK.zip"
-          fi
+          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_0_0_STAGE175"
 
-          test -n "$SOURCE_ZIP"
-          test -s "$SOURCE_ZIP"
-          unzip -q "$SOURCE_ZIP" -d "$GITHUB_WORKSPACE/source"
-
-          SOURCE_DIR="$(find "$GITHUB_WORKSPACE/source" -type f \
-            -name 'requirements-test.txt' -printf '%h\n' -quit)"
-
-          test -n "$SOURCE_DIR"
+          test -d "$SOURCE_DIR"
+          test -f "$SOURCE_DIR/requirements-test.txt"
           test -f "$SOURCE_DIR/scripts/verify-source.py"
           test -d "$SOURCE_DIR/android-wrapper"
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
-          echo "Using source directory: $SOURCE_DIR"
 
-      - name: Install Python test dependencies
+      - name: Python test bağımlılıklarını kur
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
 
-      - name: Install Playwright Chromium
+          python -m pip install --upgrade pip
+
+          python -m pip install \
+            -r "$SOURCE_DIR/requirements-test.txt"
+
+      - name: Playwright Chromium kur
         run: python -m playwright install --with-deps chromium
 
-      - name: Verify source and Android asset synchronization
+      - name: Kaynak ve Android varlık bütünlüğünü doğrula
         run: python "$SOURCE_DIR/scripts/verify-source.py"
 
-      - name: Check backend JavaScript syntax
+      - name: Backend JavaScript sözdizimini doğrula
         run: npm --prefix "$SOURCE_DIR/backend" run check
 
-      - name: Run JavaScript regression tests
+      - name: JavaScript regresyon testlerini çalıştır
         shell: bash
         run: |
           set -euo pipefail
+
           cd "$SOURCE_DIR"
 
           mapfile -d '' TESTS < <(
-            find tests scripts -maxdepth 1 -type f \
-              -name '*.js' -print0 | sort -z
+            find tests scripts -maxdepth 1 \
+              -type f -name '*.js' -print0 | sort -z
           )
 
-          echo "JavaScript test files found: ${#TESTS[@]}"
-          test "${#TESTS[@]}" -eq 130
+          echo "Bulunan JavaScript test dosyası: ${#TESTS[@]}"
+
+          test "${#TESTS[@]}" -eq 131
 
           for TEST_FILE in "${TESTS[@]}"; do
-            echo "--- Running $TEST_FILE"
+            echo "--- $TEST_FILE"
             node "$TEST_FILE"
           done
 
-      - name: Run Python and browser regression tests
+      - name: Python ve tarayıcı regresyon testlerini çalıştır
         shell: bash
         run: |
           set -euo pipefail
+
           cd "$SOURCE_DIR"
 
           python scripts/ci-preflight.py
 
           mapfile -d '' TESTS < <(
-            find scripts -maxdepth 1 -type f \
-              -name 'test-*.py' -print0 | sort -z
+            find scripts -maxdepth 1 \
+              -type f -name 'test-*.py' -print0 | sort -z
           )
 
-          echo "Python/browser test files found: ${#TESTS[@]}"
+          echo "Bulunan Python test dosyası: ${#TESTS[@]}"
+
           test "${#TESTS[@]}" -eq 7
 
           for TEST_FILE in "${TESTS[@]}"; do
-            echo "--- Running $TEST_FILE"
+            echo "--- $TEST_FILE"
             python "$TEST_FILE"
           done
 
-      - name: Build Android debug APK
+      - name: Android debug APK oluştur
         shell: bash
         run: |
           set -euo pipefail
+
           cd "$SOURCE_DIR/android-wrapper"
+
           gradle :app:assembleDebug --no-daemon
 
-      - name: Verify APK and calculate SHA-256
+      - name: APK ve SHA-256 doğrula
         shell: bash
         run: |
           set -euo pipefail
@@ -163,21 +149,20 @@ jobs:
 
           test -s "$APK"
 
-          mkdir -p "$GITHUB_WORKSPACE/stage173-output"
+          mkdir -p "$GITHUB_WORKSPACE/stage175-output"
 
           cp "$APK" \
-            "$GITHUB_WORKSPACE/stage173-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE173_DEBUG.apk"
+            "$GITHUB_WORKSPACE/stage175-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DEBUG.apk"
 
-          cd "$GITHUB_WORKSPACE/stage173-output"
+          sha256sum \
+            "$GITHUB_WORKSPACE/stage175-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DEBUG.apk" \
+            > "$GITHUB_WORKSPACE/stage175-output/SHA256SUMS.txt"
 
-          sha256sum SONGDNA_SMART_STUDIO_7_0_0_STAGE173_DEBUG.apk \
-            > SHA256SUMS.txt
-
-      - name: Upload Android debug APK artifact
+      - name: Debug APK çıktısını yükle
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.0.0-STAGE173-DEBUG-APK
-          path: stage173-output/*
+          name: SONGDNA-SMART-STUDIO-7.0.0-STAGE175-DEBUG-APK
+          path: stage175-output/*
           if-no-files-found: error
           retention-days: 14
           
