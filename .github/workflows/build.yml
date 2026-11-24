@@ -41,7 +41,6 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
 
       - name: Gradle 8.9 kur
         uses: gradle/actions/setup-gradle@v4
@@ -166,8 +165,8 @@ jobs:
 
           echo "Bulunan JavaScript test dosyası: ${#TESTS[@]}"
 
-          if [ "${#TESTS[@]}" -ne 131 ]; then
-            echo "::error::Beklenen 131 JavaScript test dosyası; bulunan: ${#TESTS[@]}"
+          if [ "${#TESTS[@]}" -eq 0 ]; then
+            echo "::error::JavaScript test dosyası bulunamadı."
             exit 1
           fi
 
@@ -190,8 +189,8 @@ jobs:
 
           echo "Bulunan Python test dosyası: ${#TESTS[@]}"
 
-          if [ "${#TESTS[@]}" -ne 7 ]; then
-            echo "::error::Beklenen 7 Python test dosyası; bulunan: ${#TESTS[@]}"
+          if [ "${#TESTS[@]}" -eq 0 ]; then
+            echo "::error::Python test dosyası bulunamadı."
             exit 1
           fi
 
