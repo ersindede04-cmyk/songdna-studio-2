@@ -1,4 +1,3 @@
-
 name: SONGDNA SMART STUDIO 7.0.0 Stage175 Android Debug APK
 
 on:
@@ -7,26 +6,24 @@ on:
     branches:
       - main
     paths:
-      - "**"
-      - ".github/workflows/**"
+      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DERLEME_KITI.zip'
+      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE175_KAYNAK.zip'
+      - '.github/workflows/**'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage175-${{ github.ref }}
+  group: songdna-stage175-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  verify-and-build:
     name: Verify Stage175 source and build Android debug APK
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
     env:
-      JAVA_VERSION: "17"
-      NODE_VERSION: "20"
-      PYTHON_VERSION: "3.11"
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
@@ -40,359 +37,244 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
-      # Node önbelleği bilerek kapalıdır.
-      # package-lock.json bulunmaması kurulum hatasına neden olmaz.
       - name: Node.js 20 kur
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: '20'
 
       - name: Python 3.11 kur
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: '3.11'
 
       - name: Gradle 8.9 kur
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: '8.9'
 
-      # Eski "tools" paketini arayan Android SDK kurulum
-      # eylemi yerine mevcut SDK araçları doğrudan kullanılır.
-      - name: Android SDK ortamını hazırla
+      - name: Android SDK paketlerini hazırla
         shell: bash
         run: |
           set -euo pipefail
 
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-
-          if [[ ! -x "$SDKMANAGER" ]]; then
-            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" \
-              -type f -name sdkmanager -print -quit 2>/dev/null || true)"
-          fi
-
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit 2>/dev/null || true)"
           if [[ -z "$SDKMANAGER" || ! -x "$SDKMANAGER" ]]; then
-            echo "::error::Android SDK sdkmanager bulunamadı."
-            find "$ANDROID_HOME" -maxdepth 5 -type f \
-              -name sdkmanager -print || true
+            echo "::error::Android SDK sdkmanager bulunamadı: $ANDROID_HOME"
+            find "$ANDROID_HOME" -maxdepth 5 -type f -name sdkmanager -print || true
             exit 1
           fi
 
-          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
-          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
-
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-
-          "$SDKMANAGER" \
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install \
             "platform-tools" \
-            "platforms;android-34" \
             "platforms;android-35" \
-            "platforms;android-36" \
-            "build-tools;34.0.0" \
-            "build-tools;35.0.0" \
-            "build-tools;36.0.0"
+            "build-tools;35.0.0"
 
-          echo "Android SDK ortamı hazır."
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
 
-      # Kaynak ZIP doğrudan depoda veya derleme kiti ZIP'inin
-      # içinde bulunabilir. Gerçek kaynak, gerekli dosyalarla doğrulanır.
-      - name: Stage175 kaynak ZIP dosyasını bul ve aç
+      - name: Stage175 derleme kitini ve doğru kaynak ZIP dosyasını bul
         id: source
         shell: bash
         run: |
           set -euo pipefail
 
           WORK_DIR="$RUNNER_TEMP/songdna-stage175"
-          SCAN_DIR="$WORK_DIR/scan"
-          EXTRACT_DIR="$WORK_DIR/source"
+          KIT_DIR="$WORK_DIR/kit"
+          SOURCE_EXTRACT="$WORK_DIR/source"
+          mkdir -p "$KIT_DIR" "$SOURCE_EXTRACT"
 
-          mkdir -p "$SCAN_DIR" "$EXTRACT_DIR"
+          KIT_ZIP="$(find "$GITHUB_WORKSPACE" -type f \
+            -name 'SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DERLEME_KITI.zip' \
+            -not -path '*/.git/*' -print -quit)"
 
-          is_source_archive() {
-            local archive="$1"
-            local listing
+          DIRECT_SOURCE_ZIP="$(find "$GITHUB_WORKSPACE" -type f \
+            -name 'SONGDNA_SMART_STUDIO_7_0_0_STAGE175_KAYNAK.zip' \
+            -not -path '*/.git/*' -print -quit)"
 
-            unzip -tq "$archive" >/dev/null 2>&1 || return 1
-            listing="$(unzip -Z1 "$archive" 2>/dev/null || true)"
+          if [[ -n "$KIT_ZIP" ]]; then
+            echo "Stage175 derleme kiti bulundu: $KIT_ZIP"
+            unzip -tq "$KIT_ZIP"
+            unzip -q "$KIT_ZIP" -d "$KIT_DIR"
 
-            printf '%s\n' "$listing" |
-              grep -Eq '(^|/)scripts/verify-source\.py$' || return 1
-
-            printf '%s\n' "$listing" |
-              grep -Eq '(^|/)android-wrapper/.*settings\.gradle(\.kts)?$' || return 1
-
-            return 0
-          }
-
-          SOURCE_ARCHIVE=""
-
-          # Önce Stage175 isimli ZIP dosyalarını ara.
-          while IFS= read -r -d '' ARCHIVE; do
-            echo "Arşiv inceleniyor: $ARCHIVE"
-
-            if is_source_archive "$ARCHIVE"; then
-              SOURCE_ARCHIVE="$ARCHIVE"
-              break
+            KIT_ROOT="$(find "$KIT_DIR" -type f -name 'BUILD_PACKAGE_MANIFEST_STAGE175.json' -print -quit | xargs -r dirname)"
+            if [[ -z "$KIT_ROOT" ]]; then
+              echo "::error::Stage175 derleme kiti manifest dosyası bulunamadı."
+              exit 1
             fi
 
-            # Dış derleme kiti ZIP dosyasını geçici alana aç.
-            OUTER_DIR="$SCAN_DIR/outer-$(basename "$ARCHIVE" .zip)"
-            mkdir -p "$OUTER_DIR"
-
-            if unzip -q "$ARCHIVE" -d "$OUTER_DIR" 2>/dev/null; then
-              while IFS= read -r -d '' INNER_ARCHIVE; do
-                if is_source_archive "$INNER_ARCHIVE"; then
-                  SOURCE_ARCHIVE="$INNER_ARCHIVE"
-                  break 2
-                fi
-              done < <(
-                find "$OUTER_DIR" -type f -iname '*.zip' -print0
-              )
+            if [[ -f "$KIT_ROOT/SHA256SUMS.txt" ]]; then
+              echo "Derleme kiti SHA-256 değerleri doğrulanıyor."
+              (cd "$KIT_ROOT" && sha256sum -c SHA256SUMS.txt)
             fi
-          done < <(
-            find "$GITHUB_WORKSPACE" \
-              -type f \
-              -iname '*STAGE175*.zip' \
-              ! -path '*/.git/*' \
-              -print0
-          )
 
-          # İsim eşleşmesi bulunamazsa tüm ZIP dosyalarını kontrol et.
-          if [[ -z "$SOURCE_ARCHIVE" ]]; then
-            while IFS= read -r -d '' ARCHIVE; do
-              if is_source_archive "$ARCHIVE"; then
-                SOURCE_ARCHIVE="$ARCHIVE"
-                break
-              fi
-            done < <(
-              find "$GITHUB_WORKSPACE" \
-                -type f -iname '*.zip' \
-                ! -path '*/.git/*' \
-                ! -path "*/$(basename "$WORK_DIR")/*" \
-                -print0
-            )
-          fi
-
-          if [[ -z "$SOURCE_ARCHIVE" ]]; then
-            echo "::error::Doğrulanabilir Stage175 kaynak ZIP bulunamadı."
-            echo "Depodaki ZIP dosyaları:"
-            find "$GITHUB_WORKSPACE" -type f \
-              -iname '*.zip' ! -path '*/.git/*' -print
+            SOURCE_ZIP="$KIT_ROOT/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_KAYNAK.zip"
+            if [[ ! -s "$SOURCE_ZIP" ]]; then
+              echo "::error::Derleme kitinin içinde beklenen Stage175 kaynak ZIP dosyası yok."
+              find "$KIT_ROOT" -maxdepth 2 -type f -print
+              exit 1
+            fi
+          elif [[ -n "$DIRECT_SOURCE_ZIP" ]]; then
+            echo "Doğrudan Stage175 kaynak ZIP bulundu: $DIRECT_SOURCE_ZIP"
+            SOURCE_ZIP="$DIRECT_SOURCE_ZIP"
+          else
+            echo "::error::Stage175 derleme kiti veya Stage175 kaynak ZIP dosyası bulunamadı."
+            echo "Depoda bulunan ZIP dosyaları:"
+            find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -not -path '*/.git/*' -print || true
             exit 1
           fi
 
-          echo "Seçilen kaynak: $SOURCE_ARCHIVE"
-          unzip -t "$SOURCE_ARCHIVE"
-          unzip -q "$SOURCE_ARCHIVE" -d "$EXTRACT_DIR"
+          echo "Kullanılacak kaynak: $SOURCE_ZIP"
+          unzip -tq "$SOURCE_ZIP"
 
-          VERIFY_FILE="$(find "$EXTRACT_DIR" -type f \
-            -path '*/scripts/verify-source.py' -print -quit)"
+          SOURCE_LIST="$(unzip -Z1 "$SOURCE_ZIP")"
+          if ! grep -Eq '(^|/)scripts/verify-source\.py$' <<< "$SOURCE_LIST"; then
+            echo "::error::Seçilen arşiv Stage175 kaynak kodu değil: verify-source.py yok."
+            exit 1
+          fi
+          if ! grep -Eq '(^|/)android-wrapper/settings\.gradle(\.kts)?$' <<< "$SOURCE_LIST"; then
+            echo "::error::Stage175 kaynak ZIP içinde Android Gradle projesi yok."
+            exit 1
+          fi
+          if ! grep -Eq '(^|/)requirements-test\.txt$' <<< "$SOURCE_LIST"; then
+            echo "::error::Stage175 kaynak ZIP içinde requirements-test.txt yok."
+            exit 1
+          fi
 
+          unzip -q "$SOURCE_ZIP" -d "$SOURCE_EXTRACT"
+          VERIFY_FILE="$(find "$SOURCE_EXTRACT" -type f -path '*/scripts/verify-source.py' -print -quit)"
           if [[ -z "$VERIFY_FILE" ]]; then
-            echo "::error::Kaynak arşivinde verify-source.py bulunamadı."
+            echo "::error::Kaynak açıldı ancak scripts/verify-source.py bulunamadı."
             exit 1
           fi
 
           SOURCE_DIR="$(dirname "$(dirname "$VERIFY_FILE")")"
-          ANDROID_DIR="$SOURCE_DIR/android-wrapper"
+          test -f "$SOURCE_DIR/requirements-test.txt"
+          test -d "$SOURCE_DIR/tests"
+          test -d "$SOURCE_DIR/scripts"
+          test -d "$SOURCE_DIR/backend"
+          test -f "$SOURCE_DIR/android-wrapper/settings.gradle.kts" -o \
+               -f "$SOURCE_DIR/android-wrapper/settings.gradle"
 
-          if [[ ! -d "$ANDROID_DIR" ]]; then
-            echo "::error::android-wrapper dizini bulunamadı."
-            exit 1
-          fi
-
-          if [[ ! -f "$ANDROID_DIR/settings.gradle.kts" && \
-                ! -f "$ANDROID_DIR/settings.gradle" ]]; then
-            echo "::error::Android Gradle settings dosyası bulunamadı."
-            exit 1
-          fi
-
+          echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
           echo "source_dir=$SOURCE_DIR" >> "$GITHUB_OUTPUT"
-          echo "android_dir=$ANDROID_DIR" >> "$GITHUB_OUTPUT"
-
-          echo "Kaynak kökü: $SOURCE_DIR"
-          echo "Android proje kökü: $ANDROID_DIR"
+          echo "Android proje dizini: $SOURCE_DIR/android-wrapper"
 
       - name: Python test bağımlılıklarını kur
         shell: bash
-        env:
-          SOURCE_DIR: ${{ steps.source.outputs.source_dir }}
         run: |
           set -euo pipefail
-
           python -m pip install --upgrade pip
-
-          if [[ -f "$SOURCE_DIR/requirements-test.txt" ]]; then
-            python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
-          elif [[ -f "$SOURCE_DIR/requirements.txt" ]]; then
-            python -m pip install -r "$SOURCE_DIR/requirements.txt"
-          else
-            python -m pip install playwright pytest
-          fi
+          python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
 
       - name: Playwright Chromium kur
-        run: |
-          python -m playwright install --with-deps chromium
+        run: python -m playwright install --with-deps chromium
 
       - name: Backend Node.js bağımlılıklarını kur
         shell: bash
-        env:
-          SOURCE_DIR: ${{ steps.source.outputs.source_dir }}
         run: |
           set -euo pipefail
-
           BACKEND_DIR="$SOURCE_DIR/backend"
-
           if [[ -f "$BACKEND_DIR/package-lock.json" ]]; then
-            npm --prefix "$BACKEND_DIR" ci
+            npm --prefix "$BACKEND_DIR" ci --no-audit --no-fund
           elif [[ -f "$BACKEND_DIR/package.json" ]]; then
             npm --prefix "$BACKEND_DIR" install --no-audit --no-fund
           else
-            echo "Backend package.json bulunamadı."
+            echo "Backend package.json bulunamadı; bağımlılık kurulumu atlandı."
           fi
 
       - name: Kaynak ve Android varlık bütünlüğünü doğrula
         shell: bash
-        env:
-          SOURCE_DIR: ${{ steps.source.outputs.source_dir }}
         run: |
           set -euo pipefail
-          cd "$SOURCE_DIR"
-          python scripts/verify-source.py
+          python "$SOURCE_DIR/scripts/verify-source.py"
 
-      - name: Backend JavaScript sözdizimini doğrula
+      - name: Backend JavaScript sözdizimini ve kontrol komutunu doğrula
         shell: bash
-        env:
-          SOURCE_DIR: ${{ steps.source.outputs.source_dir }}
         run: |
           set -euo pipefail
-
-          while IFS= read -r -d '' FILE; do
-            node --check "$FILE"
-          done < <(
-            find "$SOURCE_DIR" -type f -name '*.js' \
-              -not -path '*/node_modules/*' -print0
-          )
-
-      - name: Backend kontrol komutunu çalıştır
-        shell: bash
-        env:
-          SOURCE_DIR: ${{ steps.source.outputs.source_dir }}
-        run: |
-          set -euo pipefail
-
-          BACKEND_DIR="$SOURCE_DIR/backend"
-
-          if [[ -f "$BACKEND_DIR/package.json" ]] && \
-             node -e "const p=require(process.argv[1]); process.exit(p.scripts && p.scripts.check ? 0 : 1)" \
-             "$BACKEND_DIR/package.json"; then
-            npm --prefix "$BACKEND_DIR" run check
-          else
-            echo "Backend check komutu tanımlı değil."
-          fi
+          npm --prefix "$SOURCE_DIR/backend" run check
 
       - name: JavaScript regresyon testlerini çalıştır
         shell: bash
-        env:
-          SOURCE_DIR: ${{ steps.source.outputs.source_dir }}
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
 
           mapfile -d '' TEST_FILES < <(
-            find . -type f -path '*/scripts/test-*.js' \
-              -not -path '*/node_modules/*' -print0 | sort -z
+            find tests -type f -name '*.js' -print0 2>/dev/null | sort -z
           )
+          mapfile -d '' SCRIPT_TESTS < <(
+            find scripts -maxdepth 1 -type f -name 'test-*.js' -print0 2>/dev/null | sort -z
+          )
+          TEST_FILES+=("${SCRIPT_TESTS[@]}")
 
           if (( ${#TEST_FILES[@]} == 0 )); then
             echo "::error::JavaScript regresyon testi bulunamadı."
             exit 1
           fi
 
-          echo "JavaScript test sayısı: ${#TEST_FILES[@]}"
-
+          echo "Çalıştırılacak JavaScript test sayısı: ${#TEST_FILES[@]}"
           for TEST_FILE in "${TEST_FILES[@]}"; do
-            echo "::group::$(basename "$TEST_FILE")"
+            echo "::group::${TEST_FILE#./}"
             node "$TEST_FILE"
             echo "::endgroup::"
           done
 
       - name: Python ve tarayıcı regresyon testlerini çalıştır
         shell: bash
-        env:
-          SOURCE_DIR: ${{ steps.source.outputs.source_dir }}
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
 
-          if [[ -f scripts/ci-preflight.py ]]; then
-            python scripts/ci-preflight.py
-          fi
+          python scripts/ci-preflight.py
 
           mapfile -d '' TEST_FILES < <(
-            find scripts -type f -name 'test-*.py' \
-              ! -path '*/.venv/*' -print0 | sort -z
+            find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z
           )
+          if (( ${#TEST_FILES[@]} == 0 )); then
+            echo "::error::Python regresyon testi bulunamadı."
+            exit 1
+          fi
 
+          echo "Çalıştırılacak Python test sayısı: ${#TEST_FILES[@]}"
           for TEST_FILE in "${TEST_FILES[@]}"; do
-            echo "::group::$(basename "$TEST_FILE")"
+            echo "::group::${TEST_FILE#./}"
             python "$TEST_FILE"
             echo "::endgroup::"
           done
 
-      - name: Android Gradle projesini derle
+      - name: Android debug APK oluştur
         shell: bash
-        env:
-          ANDROID_DIR: ${{ steps.source.outputs.android_dir }}
         run: |
           set -euo pipefail
-          cd "$ANDROID_DIR"
-
-          if [[ -f ./gradlew ]]; then
-            chmod +x ./gradlew
-            ./gradlew --no-daemon --stacktrace :app:assembleDebug
-          else
-            gradle --no-daemon --stacktrace :app:assembleDebug
-          fi
+          cd "$SOURCE_DIR/android-wrapper"
+          gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: APK dosyasını ve SHA-256 değerini doğrula
         shell: bash
-        env:
-          ANDROID_DIR: ${{ steps.source.outputs.android_dir }}
         run: |
           set -euo pipefail
 
-          APK_PATH="$ANDROID_DIR/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [[ ! -s "$APK_PATH" ]]; then
-            echo "::error::APK üretilemedi veya dosya boş."
-            find "$ANDROID_DIR" -type f \
-              -path '*/build/outputs/apk/*' -print || true
+          APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+          if [[ ! -s "$APK" ]]; then
+            echo "::error::Gradle tamamlandı ancak debug APK bulunamadı veya boş."
+            find "$SOURCE_DIR/android-wrapper" -type f -path '*/build/outputs/*' -print || true
             exit 1
           fi
 
-          mkdir -p "$RUNNER_TEMP/songdna-stage175-artifacts"
-
-          cp "$APK_PATH" \
-            "$RUNNER_TEMP/songdna-stage175-artifacts/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DEBUG.apk"
-
-          cd "$RUNNER_TEMP/songdna-stage175-artifacts"
-          sha256sum SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DEBUG.apk \
-            | tee SHA256SUMS.txt
-
-          ls -lh
+          OUTPUT_DIR="$GITHUB_WORKSPACE/stage175-output"
+          mkdir -p "$OUTPUT_DIR"
+          cp "$APK" "$OUTPUT_DIR/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DEBUG.apk"
+          sha256sum "$OUTPUT_DIR/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DEBUG.apk" > "$OUTPUT_DIR/SHA256SUMS.txt"
+          ls -lh "$OUTPUT_DIR"
 
       - name: Stage175 debug APK çıktısını yükle
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-SMART-STUDIO-7.0.0-STAGE175-DEBUG-APK
-          path: |
-            ${{ runner.temp }}/songdna-stage175-artifacts/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DEBUG.apk
-            ${{ runner.temp }}/songdna-stage175-artifacts/SHA256SUMS.txt
+          path: stage175-output/*
           if-no-files-found: error
           retention-days: 14
-          
