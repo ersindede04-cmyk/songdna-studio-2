@@ -1,3 +1,4 @@
+
 name: SONGDNA SMART STUDIO 7.0.0 Stage175 Android Debug APK
 
 on:
@@ -75,18 +76,21 @@ jobs:
           gradle-version: "8.9"
           cache-disabled: false
 
+      # FIX: Eski v3 yerine v4.
+      # Google tarafından kaldırılan "tools" paketi istenmiyor.
       - name: Android SDK ortamını hazırla
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: "platform-tools"
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
 
       - name: Gerekli Android SDK paketlerini kur
         shell: bash
         run: |
           set -euo pipefail
 
-          yes | sdkmanager --licenses >/dev/null || true
-
           sdkmanager \
-            "platform-tools" \
             "platforms;android-${ANDROID_API_LEVEL}" \
             "build-tools;${ANDROID_BUILD_TOOLS}"
 
@@ -110,7 +114,7 @@ jobs:
             exit 1
           fi
 
-          echo "Bulunan Stage175 ZIP dosyaları:"
+          echo "Bulunan kaynak ZIP dosyaları:"
           printf '%s\n' "${ZIP_FILES[@]}"
 
           SELECTED_ZIP=""
@@ -131,7 +135,7 @@ jobs:
           echo "Seçilen kaynak: $SELECTED_ZIP"
 
           if ! unzip -t "$SELECTED_ZIP"; then
-            echo "::error::Stage175 ZIP dosyası bozuk veya eksik."
+            echo "::error::Kaynak ZIP dosyası bozuk veya eksik."
             exit 1
           fi
 
@@ -142,9 +146,21 @@ jobs:
 
           unzip -q "$SELECTED_ZIP" -d "$SOURCE_DIR"
 
-          echo "SONGDNA_SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+          VERIFY_SCRIPT="$(find "$SOURCE_DIR" \
+            -type f \
+            -path '*/scripts/verify-source.py' \
+            -print -quit)"
 
-          echo "Kaynak başarıyla açıldı."
+          if [ -z "$VERIFY_SCRIPT" ]; then
+            echo "::error::scripts/verify-source.py kaynak ZIP içinde bulunamadı."
+            exit 1
+          fi
+
+          SOURCE_ROOT="${VERIFY_SCRIPT%/scripts/verify-source.py}"
+
+          echo "SONGDNA_SOURCE_DIR=$SOURCE_ROOT" >> "$GITHUB_ENV"
+
+          echo "Kaynak dizini: $SOURCE_ROOT"
 
       - name: Python test bağımlılıklarını kur
         shell: bash
@@ -167,7 +183,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           python -m playwright install --with-deps chromium
 
       - name: Kaynak ve Android varlık bütünlüğünü doğrula
@@ -175,14 +190,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERIFY_SCRIPT="$SONGDNA_SOURCE_DIR/scripts/verify-source.py"
-
-          if [ -f "$VERIFY_SCRIPT" ]; then
-            python "$VERIFY_SCRIPT"
-          else
-            echo "::error::scripts/verify-source.py bulunamadı."
-            exit 1
-          fi
+          python "$SONGDNA_SOURCE_DIR/scripts/verify-source.py"
 
       - name: Backend Node.js bağımlılıklarını kur
         shell: bash
@@ -196,7 +204,7 @@ jobs:
           elif [ -f "$BACKEND_DIR/package.json" ]; then
             npm install --prefix "$BACKEND_DIR"
           else
-            echo "Backend package.json bulunamadı; bağımlılık kurulumu atlandı."
+            echo "Backend package.json bulunamadı."
           fi
 
       - name: Backend JavaScript sözdizimini doğrula
@@ -212,15 +220,6 @@ jobs:
               node --check "$file"
             fi
           done
-
-          if [ -f "$SONGDNA_SOURCE_DIR/backend/package.json" ]; then
-            npm --prefix "$SONGDNA_SOURCE_DIR/backend" run check --if-present
-          fi
-
-      - name: Backend kontrol komutunu çalıştır
-        shell: bash
-        run: |
-          set -euo pipefail
 
           if [ -f "$SONGDNA_SOURCE_DIR/backend/package.json" ]; then
             npm --prefix "$SONGDNA_SOURCE_DIR/backend" run check --if-present
@@ -245,10 +244,10 @@ jobs:
               -print0 | sort -z
           )
 
-          echo "Çalıştırılan JavaScript test sayısı: $TEST_COUNT"
+          echo "JavaScript test sayısı: $TEST_COUNT"
 
           if [ "$TEST_COUNT" -eq 0 ]; then
-            echo "::error::JavaScript regresyon testi bulunamadı."
+            echo "::error::JavaScript testleri bulunamadı."
             exit 1
           fi
 
@@ -271,27 +270,22 @@ jobs:
               -print0 | sort -z
           )
 
-          echo "Çalıştırılan Python test sayısı: $TEST_COUNT"
+          echo "Python test sayısı: $TEST_COUNT"
 
       - name: Android Gradle projesini bul
         shell: bash
         run: |
           set -euo pipefail
 
-          GRADLE_WRAPPER=""
-
-          while IFS= read -r -d '' candidate; do
-            GRADLE_WRAPPER="$candidate"
-            break
-          done < <(
+          GRADLE_WRAPPER="$(
             find "$SONGDNA_SOURCE_DIR" \
               -type f \
               -name 'gradlew' \
-              -print0
-          )
+              -print -quit
+          )"
 
           if [ -z "$GRADLE_WRAPPER" ]; then
-            echo "::error::Android Gradle projesi bulunamadı. gradlew eksik."
+            echo "::error::Android Gradle projesi bulunamadı."
             exit 1
           fi
 
@@ -299,9 +293,9 @@ jobs:
 
           echo "ANDROID_PROJECT_DIR=$ANDROID_PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Android proje dizini: $ANDROID_PROJECT_DIR"
-
           chmod +x "$GRADLE_WRAPPER"
+
+          echo "Android proje dizini: $ANDROID_PROJECT_DIR"
 
       - name: Android debug APK oluştur
         shell: bash
@@ -320,17 +314,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          APK_FILE=""
-
-          while IFS= read -r -d '' candidate; do
-            APK_FILE="$candidate"
-            break
-          done < <(
+          APK_FILE="$(
             find "$ANDROID_PROJECT_DIR" \
               -type f \
               -path '*/build/outputs/apk/*/debug/*.apk' \
-              -print0
-          )
+              -print -quit
+          )"
 
           if [ -z "$APK_FILE" ]; then
             echo "::error::Debug APK oluşturulamadı."
