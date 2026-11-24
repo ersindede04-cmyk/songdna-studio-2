@@ -48,7 +48,35 @@ jobs:
           gradle-version: '8.9'
 
       - name: Android SDK araçlarını hazırla
-        uses: android-actions/setup-android@v3
+        shell: bash
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          fi
+
+          if [ -z "${SDKMANAGER:-}" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::Android SDK command-line tools bulunamadı."
+            exit 1
+          fi
+
+          echo "Android SDK: $ANDROID_HOME"
+
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+
+          "$SDKMANAGER" --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
 
       - name: Stage175 kaynak ZIP dosyasını otomatik bul ve aç
         shell: bash
@@ -69,7 +97,6 @@ jobs:
             printf '%s\n' "$listing" | grep -Eq '(^|/)scripts/verify-source\.py$' || return 1
             printf '%s\n' "$listing" | grep -Eq '(^|/)android-wrapper/' || return 1
             printf '%s\n' "$listing" | grep -Eq '(^|/)requirements-test\.txt$' || return 1
-
             return 0
           }
 
@@ -94,7 +121,6 @@ jobs:
                 fi
               done < <(find "$KIT_DIR" -type f -iname '*.zip' -print0)
             fi
-
           done < <(
             find "$GITHUB_WORKSPACE" \
               -type f -iname '*.zip' \
@@ -104,14 +130,12 @@ jobs:
           )
 
           if [ -z "$SOURCE_ARCHIVE" ]; then
-            echo "::error::Stage175 kaynak arşivi bulunamadı."
-            echo "Depoda bulunan ZIP dosyaları:"
-            find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -not -path '*/.git/*' -print
+            echo "::error::Stage175 kaynak arşivi bulunamadı veya beklenen dosyalar ZIP içinde yok."
+            find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -not -path '*/.git/*' -not -path '*/stage175-source-work/*' -print
             exit 1
           fi
 
           echo "Kullanılacak kaynak arşivi: $SOURCE_ARCHIVE"
-
           unzip -q "$SOURCE_ARCHIVE" -d "$EXTRACT_DIR"
 
           VERIFY_FILE="$(find "$EXTRACT_DIR" -type f -path '*/scripts/verify-source.py' -print -quit)"
@@ -129,13 +153,13 @@ jobs:
           test -d "$SOURCE_DIR/backend"
           test -d "$SOURCE_DIR/android-wrapper"
 
-          test -f "$SOURCE_DIR/android-wrapper/settings.gradle.kts" -o \
-               -f "$SOURCE_DIR/android-wrapper/settings.gradle"
+          if [ ! -f "$SOURCE_DIR/android-wrapper/settings.gradle.kts" ] && [ ! -f "$SOURCE_DIR/android-wrapper/settings.gradle" ]; then
+            echo "::error::Android Gradle settings dosyası bulunamadı."
+            exit 1
+          fi
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
-
-          echo "Doğrulanan kaynak dizini: $SOURCE_DIR"
-          echo "Kaynak ZIP bütünlük kontrolü başarılı."
+          echo "Stage175 kaynak dizini doğrulandı: $SOURCE_DIR"
 
       - name: Python test bağımlılıklarını kur
         shell: bash
@@ -160,15 +184,21 @@ jobs:
           cd "$SOURCE_DIR"
 
           mapfile -d '' TESTS < <(
-            find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z
+            find tests -type f -name '*.js' -print0 2>/dev/null | sort -z
           )
 
-          echo "Bulunan JavaScript test dosyası: ${#TESTS[@]}"
+          mapfile -d '' SCRIPT_TESTS < <(
+            find scripts -maxdepth 1 -type f -name 'test-*.js' -print0 2>/dev/null | sort -z
+          )
+
+          TESTS+=("${SCRIPT_TESTS[@]}")
 
           if [ "${#TESTS[@]}" -eq 0 ]; then
-            echo "::error::JavaScript test dosyası bulunamadı."
+            echo "::error::JavaScript regresyon testi bulunamadı."
             exit 1
           fi
+
+          echo "JavaScript test sayısı: ${#TESTS[@]}"
 
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- $TEST_FILE"
@@ -187,12 +217,12 @@ jobs:
             find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z
           )
 
-          echo "Bulunan Python test dosyası: ${#TESTS[@]}"
-
           if [ "${#TESTS[@]}" -eq 0 ]; then
-            echo "::error::Python test dosyası bulunamadı."
+            echo "::error::Python regresyon testi bulunamadı."
             exit 1
           fi
+
+          echo "Python test sayısı: ${#TESTS[@]}"
 
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- $TEST_FILE"
@@ -212,7 +242,11 @@ jobs:
           set -euo pipefail
 
           APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-          test -s "$APK"
+
+          if [ ! -s "$APK" ]; then
+            echo "::error::APK üretilemedi veya dosya boş."
+            exit 1
+          fi
 
           mkdir -p "$GITHUB_WORKSPACE/stage175-output"
 
