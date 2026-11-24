@@ -5,19 +5,20 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE175_KAYNAK.zip'
+      - '**.zip'
       - '.github/workflows/build.yml'
+      - '.github/workflows/**'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-7-0-0-android-${{ github.ref }}
+  group: songdna-7-0-0-stage175-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify-and-build:
-    name: Verify source and build Android APK
+    name: Verify Stage175 source and build Android debug APK
     runs-on: ubuntu-24.04
     timeout-minutes: 60
 
@@ -40,43 +41,109 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
 
       - name: Gradle 8.9 kur
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Stage175 kaynak ZIP dosyasını aç
+      - name: Android SDK araçlarını hazırla
+        uses: android-actions/setup-android@v3
+
+      - name: Stage175 kaynak ZIP dosyasını otomatik bul ve aç
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_KAYNAK.zip"
+          WORK_DIR="$GITHUB_WORKSPACE/stage175-source-work"
+          EXTRACT_DIR="$WORK_DIR/extracted"
+          mkdir -p "$WORK_DIR" "$EXTRACT_DIR"
 
-          test -s "$ZIP_FILE"
+          is_source_archive() {
+            local archive="$1"
+            local listing
 
-          mkdir -p "$GITHUB_WORKSPACE/source"
+            unzip -tq "$archive" >/dev/null 2>&1 || return 1
+            listing="$(unzip -Z1 "$archive" 2>/dev/null || true)"
 
-          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
+            printf '%s\n' "$listing" | grep -Eq '(^|/)scripts/verify-source\.py$' || return 1
+            printf '%s\n' "$listing" | grep -Eq '(^|/)android-wrapper/' || return 1
+            printf '%s\n' "$listing" | grep -Eq '(^|/)requirements-test\.txt$' || return 1
 
-          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_0_0_STAGE175"
+            return 0
+          }
 
-          test -d "$SOURCE_DIR"
+          SOURCE_ARCHIVE=""
+
+          while IFS= read -r -d '' ARCHIVE; do
+            echo "ZIP inceleniyor: $ARCHIVE"
+
+            if is_source_archive "$ARCHIVE"; then
+              SOURCE_ARCHIVE="$ARCHIVE"
+              break
+            fi
+
+            KIT_DIR="$WORK_DIR/kit-scan-$(basename "$ARCHIVE" .zip)"
+            mkdir -p "$KIT_DIR"
+
+            if unzip -q "$ARCHIVE" -d "$KIT_DIR" 2>/dev/null; then
+              while IFS= read -r -d '' INNER_ARCHIVE; do
+                if is_source_archive "$INNER_ARCHIVE"; then
+                  SOURCE_ARCHIVE="$INNER_ARCHIVE"
+                  break 2
+                fi
+              done < <(find "$KIT_DIR" -type f -iname '*.zip' -print0)
+            fi
+
+          done < <(
+            find "$GITHUB_WORKSPACE" \
+              -type f -iname '*.zip' \
+              ! -path '*/.git/*' \
+              ! -path '*/stage175-source-work/*' \
+              -print0
+          )
+
+          if [ -z "$SOURCE_ARCHIVE" ]; then
+            echo "::error::Stage175 kaynak arşivi bulunamadı."
+            echo "Depoda bulunan ZIP dosyaları:"
+            find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -not -path '*/.git/*' -print
+            exit 1
+          fi
+
+          echo "Kullanılacak kaynak arşivi: $SOURCE_ARCHIVE"
+
+          unzip -q "$SOURCE_ARCHIVE" -d "$EXTRACT_DIR"
+
+          VERIFY_FILE="$(find "$EXTRACT_DIR" -type f -path '*/scripts/verify-source.py' -print -quit)"
+
+          if [ -z "$VERIFY_FILE" ]; then
+            echo "::error::scripts/verify-source.py bulunamadı."
+            exit 1
+          fi
+
+          SOURCE_DIR="$(dirname "$(dirname "$VERIFY_FILE")")"
+
           test -f "$SOURCE_DIR/requirements-test.txt"
-          test -f "$SOURCE_DIR/scripts/verify-source.py"
+          test -d "$SOURCE_DIR/scripts"
+          test -d "$SOURCE_DIR/tests"
+          test -d "$SOURCE_DIR/backend"
           test -d "$SOURCE_DIR/android-wrapper"
 
+          test -f "$SOURCE_DIR/android-wrapper/settings.gradle.kts" -o \
+               -f "$SOURCE_DIR/android-wrapper/settings.gradle"
+
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
+
+          echo "Doğrulanan kaynak dizini: $SOURCE_DIR"
+          echo "Kaynak ZIP bütünlük kontrolü başarılı."
 
       - name: Python test bağımlılıklarını kur
         shell: bash
         run: |
           set -euo pipefail
-
           python -m pip install --upgrade pip
-
-          python -m pip install \
-            -r "$SOURCE_DIR/requirements-test.txt"
+          python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
 
       - name: Playwright Chromium kur
         run: python -m playwright install --with-deps chromium
@@ -91,17 +158,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           cd "$SOURCE_DIR"
 
           mapfile -d '' TESTS < <(
-            find tests scripts -maxdepth 1 \
-              -type f -name '*.js' -print0 | sort -z
+            find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z
           )
 
           echo "Bulunan JavaScript test dosyası: ${#TESTS[@]}"
 
-          test "${#TESTS[@]}" -eq 131
+          if [ "${#TESTS[@]}" -ne 131 ]; then
+            echo "::error::Beklenen 131 JavaScript test dosyası; bulunan: ${#TESTS[@]}"
+            exit 1
+          fi
 
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- $TEST_FILE"
@@ -112,19 +180,20 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           cd "$SOURCE_DIR"
 
           python scripts/ci-preflight.py
 
           mapfile -d '' TESTS < <(
-            find scripts -maxdepth 1 \
-              -type f -name 'test-*.py' -print0 | sort -z
+            find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z
           )
 
           echo "Bulunan Python test dosyası: ${#TESTS[@]}"
 
-          test "${#TESTS[@]}" -eq 7
+          if [ "${#TESTS[@]}" -ne 7 ]; then
+            echo "::error::Beklenen 7 Python test dosyası; bulunan: ${#TESTS[@]}"
+            exit 1
+          fi
 
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- $TEST_FILE"
@@ -135,18 +204,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           cd "$SOURCE_DIR/android-wrapper"
-
           gradle :app:assembleDebug --no-daemon
 
-      - name: APK ve SHA-256 doğrula
+      - name: APK dosyasını ve SHA-256 değerini doğrula
         shell: bash
         run: |
           set -euo pipefail
 
           APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-
           test -s "$APK"
 
           mkdir -p "$GITHUB_WORKSPACE/stage175-output"
@@ -158,7 +224,9 @@ jobs:
             "$GITHUB_WORKSPACE/stage175-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DEBUG.apk" \
             > "$GITHUB_WORKSPACE/stage175-output/SHA256SUMS.txt"
 
-      - name: Debug APK çıktısını yükle
+          ls -lh "$GITHUB_WORKSPACE/stage175-output/"
+
+      - name: Stage175 debug APK çıktısını yükle
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA-SMART-STUDIO-7.0.0-STAGE175-DEBUG-APK
