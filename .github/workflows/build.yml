@@ -21,6 +21,10 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      # --------------------------------------------------
+      # 1. Geliştirme ortamı
+      # --------------------------------------------------
+
       - name: Kaynak deposunu al
         uses: actions/checkout@v4
         with:
@@ -32,24 +36,26 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # Cache kapalı: Depoda henüz bulunmayan lock dosyaları
+      # nedeniyle setup-node adımının başarısız olması önlenir.
       - name: Node.js 20 kur
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
-            backend/package-lock.json
 
       - name: Python 3.11 kur
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
 
-      - name: Gradle 8.9 kur
+      # Gradle sürümünü kaynak projenin Gradle Wrapper'ı belirler.
+      - name: Gradle ortamını hazırla
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
+
+      # --------------------------------------------------
+      # 2. Android SDK
+      # --------------------------------------------------
 
       - name: Android SDK ortamını hazırla
         uses: android-actions/setup-android@v3
@@ -59,17 +65,24 @@ jobs:
         run: |
           set -euo pipefail
 
-          SDKMANAGER="$(find "${ANDROID_HOME:-/usr/local/lib/android/sdk}" \
-            -type f -name sdkmanager -path '*/bin/sdkmanager' \
-            -print -quit 2>/dev/null || true)"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
 
-          if [ -z "$SDKMANAGER" ]; then
-            SDKMANAGER="$(find "$HOME" -type f -name sdkmanager \
-              -path '*/bin/sdkmanager' -print -quit 2>/dev/null || true)"
+          if [ -z "$SDK_ROOT" ]; then
+            echo "::error::Android SDK yolu bulunamadı."
+            exit 1
           fi
 
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::Android sdkmanager bulunamadı."
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" \
+              -type f -name sdkmanager \
+              -path '*/bin/sdkmanager' \
+              -print -quit 2>/dev/null || true)"
+          fi
+
+          if [ -z "$SDKMANAGER" ] || [ ! -x "$SDKMANAGER" ]; then
+            echo "::error::sdkmanager bulunamadı."
             exit 1
           fi
 
@@ -82,6 +95,10 @@ jobs:
 
           echo "Android SDK paketleri hazır."
 
+      # --------------------------------------------------
+      # 3. Stage175 kaynak ZIP dosyasını bul ve aç
+      # --------------------------------------------------
+
       - name: Stage175 kaynak ZIP dosyasını güvenli şekilde bul ve aç
         shell: bash
         run: |
@@ -90,21 +107,24 @@ jobs:
           echo "Stage175 kaynak arşivi aranıyor..."
 
           mapfile -d '' ARCHIVES < <(
-            find . -type f -iname '*stage175*.zip' \
-              -not -path './.git/*' \
+            find "$GITHUB_WORKSPACE" \
+              -type f \
+              -iname '*stage175*.zip' \
+              -not -path '*/.git/*' \
               -print0 | sort -z
           )
 
           if [ "${#ARCHIVES[@]}" -eq 0 ]; then
-            echo "::error::Stage175 adını taşıyan kaynak ZIP bulunamadı."
+            echo "::error::Stage175 kaynak ZIP dosyası bulunamadı."
 
             echo "Depodaki ZIP dosyaları:"
-            find . -type f -iname '*.zip' -print
+            find "$GITHUB_WORKSPACE" \
+              -type f -iname '*.zip' -print
 
             exit 1
           fi
 
-          echo "Bulunan Stage175 arşivleri:"
+          echo "Bulunan arşivler:"
           printf '%s\n' "${ARCHIVES[@]}"
 
           SOURCE_ZIP=""
@@ -117,10 +137,15 @@ jobs:
           done
 
           if [ -z "$SOURCE_ZIP" ]; then
+            if [ "${#ARCHIVES[@]}" -ne 1 ]; then
+              echo "::error::Birden fazla Stage175 ZIP bulundu ancak SOURCE arşivi belirlenemedi."
+              exit 1
+            fi
+
             SOURCE_ZIP="${ARCHIVES[0]}"
           fi
 
-          echo "Kullanılacak kaynak arşivi: $SOURCE_ZIP"
+          echo "Seçilen arşiv: $SOURCE_ZIP"
 
           unzip -tq "$SOURCE_ZIP"
 
@@ -134,22 +159,27 @@ jobs:
 
           echo "Stage175 kaynak arşivi başarıyla açıldı."
 
+      # --------------------------------------------------
+      # 4. Python test bağımlılıkları
+      # --------------------------------------------------
+
       - name: Python test bağımlılıklarını kur
         shell: bash
         run: |
           set -euo pipefail
 
-          python -m pip install --upgrade pip
-
           ROOT="$SONGDNA_SOURCE_DIR"
+
+          python -m pip install --upgrade pip
 
           if [ -f "$ROOT/requirements.txt" ]; then
             python -m pip install -r "$ROOT/requirements.txt"
+
           elif [ -f "$ROOT/pyproject.toml" ]; then
             python -m pip install "$ROOT"
+
           else
-            echo "Python bağımlılık dosyası bulunamadı."
-            echo "Temel Python testleri için devam ediliyor."
+            echo "Kaynak kökünde Python bağımlılık dosyası yok."
           fi
 
           python -m pip install playwright
@@ -158,7 +188,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           python -m playwright install --with-deps chromium
+
+      # --------------------------------------------------
+      # 5. Kaynak bütünlüğü ve backend kontrolü
+      # --------------------------------------------------
 
       - name: Kaynak ve Android varlık bütünlüğünü doğrula
         shell: bash
@@ -168,14 +203,15 @@ jobs:
           ROOT="$SONGDNA_SOURCE_DIR"
 
           VERIFY="$(find "$ROOT" -type f \
-            -path '*/scripts/verify-source.py' -print -quit)"
+            -path '*/scripts/verify-source.py' \
+            -print -quit)"
 
-          if [ -n "$VERIFY" ]; then
-            python "$VERIFY"
-          else
+          if [ -z "$VERIFY" ]; then
             echo "::error::verify-source.py bulunamadı."
             exit 1
           fi
+
+          python "$VERIFY"
 
       - name: Backend JavaScript sözdizimini doğrula
         shell: bash
@@ -183,21 +219,26 @@ jobs:
           set -euo pipefail
 
           ROOT="$SONGDNA_SOURCE_DIR"
+          BACKEND="$ROOT/backend"
 
-          if [ -f "$ROOT/backend/package.json" ]; then
-            cd "$ROOT/backend"
-
-            if [ -f package-lock.json ]; then
-              npm ci
-            else
-              npm install
-            fi
-
-            npm run check
-          else
-            echo "Backend package.json bulunamadı."
+          if [ ! -f "$BACKEND/package.json" ]; then
+            echo "::error::Backend package.json bulunamadı."
             exit 1
           fi
+
+          cd "$BACKEND"
+
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+          npm run check
+
+      # --------------------------------------------------
+      # 6. JavaScript regresyon testleri
+      # --------------------------------------------------
 
       - name: JavaScript regresyon testlerini çalıştır
         shell: bash
@@ -218,20 +259,27 @@ jobs:
           COUNT=0
 
           while IFS= read -r -d '' TEST; do
-            echo "Test çalıştırılıyor: $TEST"
+            echo "JavaScript testi: $TEST"
             node "$TEST"
             COUNT=$((COUNT + 1))
           done < <(
-            find scripts -maxdepth 1 -type f \
-              -name 'test-*.js' -print0 2>/dev/null | sort -z
+            find scripts \
+              -maxdepth 1 \
+              -type f \
+              -name 'test-*.js' \
+              -print0 2>/dev/null | sort -z
           )
 
-          echo "Çalıştırılan JavaScript test sayısı: $COUNT"
+          echo "JavaScript test sayısı: $COUNT"
 
           if [ "$COUNT" -eq 0 ]; then
-            echo "::error::JavaScript test dosyası bulunamadı."
+            echo "::error::JavaScript testleri bulunamadı."
             exit 1
           fi
+
+      # --------------------------------------------------
+      # 7. Python ve tarayıcı regresyon testleri
+      # --------------------------------------------------
 
       - name: Python ve tarayıcı regresyon testlerini çalıştır
         shell: bash
@@ -248,12 +296,18 @@ jobs:
             python "$TEST"
             COUNT=$((COUNT + 1))
           done < <(
-            find scripts -maxdepth 1 -type f \
+            find scripts \
+              -maxdepth 1 \
+              -type f \
               \( -name 'test-*.py' -o -name 'test_*.py' \) \
               -print0 2>/dev/null | sort -z
           )
 
-          echo "Çalıştırılan Python test sayısı: $COUNT"
+          echo "Python test sayısı: $COUNT"
+
+      # --------------------------------------------------
+      # 8. Android Gradle projesini bul
+      # --------------------------------------------------
 
       - name: Android Gradle projesini bul
         id: android
@@ -264,13 +318,21 @@ jobs:
           ROOT="$SONGDNA_SOURCE_DIR"
 
           mapfile -d '' WRAPPERS < <(
-            find "$ROOT" -type f -name gradlew \
-              -not -path '*/.gradle/*' -print0 | sort -z
+            find "$ROOT" \
+              -type f \
+              -name gradlew \
+              -not -path '*/.gradle/*' \
+              -print0 | sort -z
           )
 
           if [ "${#WRAPPERS[@]}" -eq 0 ]; then
-            echo "::error::Gradle wrapper bulunamadı."
+            echo "::error::Android Gradle Wrapper bulunamadı."
             exit 1
+          fi
+
+          if [ "${#WRAPPERS[@]}" -gt 1 ]; then
+            echo "Birden fazla Gradle Wrapper bulundu:"
+            printf '%s\n' "${WRAPPERS[@]}"
           fi
 
           WRAPPER="${WRAPPERS[0]}"
@@ -278,11 +340,15 @@ jobs:
 
           chmod +x "$WRAPPER"
 
-          echo "Gradle wrapper: $WRAPPER"
-          echo "Android proje dizini: $PROJECT_DIR"
+          echo "Gradle Wrapper: $WRAPPER"
+          echo "Proje dizini: $PROJECT_DIR"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
           echo "wrapper=$WRAPPER" >> "$GITHUB_OUTPUT"
+
+      # --------------------------------------------------
+      # 9. Android Debug APK oluştur
+      # --------------------------------------------------
 
       - name: Android debug APK oluştur
         shell: bash
@@ -295,10 +361,17 @@ jobs:
           cd "$PROJECT_DIR"
 
           "$WRAPPER" --version
-          "$WRAPPER" assembleDebug --no-daemon
+
+          "$WRAPPER" \
+            assembleDebug \
+            --no-daemon \
+            --stacktrace
+
+      # --------------------------------------------------
+      # 10. APK ve SHA-256 doğrulaması
+      # --------------------------------------------------
 
       - name: APK dosyasını ve SHA-256 değerini doğrula
-        id: apk
         shell: bash
         run: |
           set -euo pipefail
@@ -306,7 +379,8 @@ jobs:
           ROOT="$SONGDNA_SOURCE_DIR"
 
           mapfile -d '' APKS < <(
-            find "$ROOT" -type f \
+            find "$ROOT" \
+              -type f \
               -path '*/build/outputs/apk/*/debug/*.apk' \
               -print0 | sort -z
           )
@@ -319,16 +393,21 @@ jobs:
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
 
           APK="${APKS[0]}"
+
           DEST="$GITHUB_WORKSPACE/artifacts/SONGDNA_SMART_STUDIO_7_0_0_STAGE175_DEBUG.apk"
 
           cp "$APK" "$DEST"
 
           test -s "$DEST"
 
-          sha256sum "$DEST" | tee \
-            "$GITHUB_WORKSPACE/artifacts/SHA256SUMS.txt"
+          sha256sum "$DEST" \
+            | tee "$GITHUB_WORKSPACE/artifacts/SHA256SUMS.txt"
 
-          echo "apk_path=$DEST" >> "$GITHUB_OUTPUT"
+          echo "APK başarıyla doğrulandı."
+
+      # --------------------------------------------------
+      # 11. GitHub Actions çıktısını yükle
+      # --------------------------------------------------
 
       - name: Stage175 debug APK çıktısını yükle
         uses: actions/upload-artifact@v4
