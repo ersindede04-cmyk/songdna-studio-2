@@ -1,143 +1,139 @@
 
-name: SONGDNA SMART STUDIO 7.0.0 Stage176 Android Debug APK
+name: SONGDNA SMART STUDIO 7.0.0 — Stage177 Android Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE176_DERLEME_KITI.zip'
-      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE176_KAYNAK.zip'
+      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE177_KAYNAK.zip'
+      - '.github/workflows/songdna-stage177.yml'
       - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-7-0-0-stage176-android-${{ github.ref }}
+  group: songdna-stage177-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify-and-build:
+    name: Verify source, run regressions and build Android APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
-      - name: GitHub deposunu al
+      - name: Checkout GitHub repository
         uses: actions/checkout@v4
 
-      - name: Java 17 kur
+      - name: Install Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Node.js 20 kur
+      - name: Install Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Python 3.11 kur
+      - name: Install Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Gradle 8.9 kur
+      - name: Install Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Derleme kitini veya kaynak ZIP dosyasını hazırla
+      - name: Extract Stage177 source archive
         shell: bash
         run: |
           set -euo pipefail
-
-          WORK_DIR="$RUNNER_TEMP/songdna-stage176"
-          mkdir -p "$WORK_DIR/kit" "$WORK_DIR/source"
-
-          KIT_ZIP="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_0_0_STAGE176_DERLEME_KITI.zip"
-          SOURCE_ZIP="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_0_0_STAGE176_KAYNAK.zip"
-
-          if [ -s "$KIT_ZIP" ]; then
-            echo "Stage176 derleme kiti bulundu; içerik açılıyor."
-            unzip -q "$KIT_ZIP" -d "$WORK_DIR/kit"
-            SOURCE_ZIP="$WORK_DIR/kit/SONGDNA_SMART_STUDIO_7_0_0_STAGE176_KAYNAK.zip"
-          fi
-
-          test -s "$SOURCE_ZIP"
-          unzip -q "$SOURCE_ZIP" -d "$WORK_DIR/source"
-
-          SOURCE_DIR="$WORK_DIR/source/SONGDNA_SMART_STUDIO_7_0_0_STAGE176"
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_0_0_STAGE177_KAYNAK.zip"
+          test -s "$ZIP_FILE"
+          mkdir -p "$GITHUB_WORKSPACE/source"
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
+          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_0_0_STAGE177"
           test -d "$SOURCE_DIR"
           test -f "$SOURCE_DIR/requirements-test.txt"
-
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
-          echo "Stage176 kaynak dizini hazır: $SOURCE_DIR"
 
-      - name: Python test bağımlılıklarını kur
+      - name: Install Python browser-test dependencies
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
 
-      - name: Playwright Chromium kur
+      - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Kaynak ve Android varlık bütünlüğünü doğrula
+      - name: Verify source and Android asset integrity
         run: python "$SOURCE_DIR/scripts/verify-source.py"
 
-      - name: Backend JavaScript sözdizimini doğrula
+      - name: Verify backend JavaScript syntax
         run: npm --prefix "$SOURCE_DIR/backend" run check
 
-      - name: JavaScript regresyon testlerini çalıştır
+      - name: Run all JavaScript regression tests
         shell: bash
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
           mapfile -d '' TESTS < <(find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z)
-          echo "Bulunan JavaScript test dosyası: ${#TESTS[@]}"
-          test "${#TESTS[@]}" -ge 130
+          echo "JavaScript regression files found: ${#TESTS[@]}"
+          test "${#TESTS[@]}" -eq 133
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- $TEST_FILE"
             node "$TEST_FILE"
           done
 
-      - name: Python ve tarayıcı regresyon testlerini çalıştır
+      - name: Run Python preflight and browser regression tests
         shell: bash
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
           python scripts/ci-preflight.py
           mapfile -d '' TESTS < <(find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z)
-          echo "Bulunan Python test dosyası: ${#TESTS[@]}"
+          echo "Python regression files found: ${#TESTS[@]}"
           test "${#TESTS[@]}" -eq 7
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- $TEST_FILE"
             python "$TEST_FILE"
           done
 
-      - name: Android debug APK oluştur
+      - name: Build Android debug APK
         shell: bash
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR/android-wrapper"
-          gradle :app:assembleDebug --no-daemon
+          gradle :app:assembleDebug --no-daemon --stacktrace --warning-mode all
 
-      - name: APK ve SHA-256 doğrula
+      - name: Verify APK and generate SHA-256
         shell: bash
         run: |
           set -euo pipefail
           APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-          mkdir -p "$GITHUB_WORKSPACE/stage176-output"
-          cp "$APK" "$GITHUB_WORKSPACE/stage176-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE176_DEBUG.apk"
-          sha256sum "$GITHUB_WORKSPACE/stage176-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE176_DEBUG.apk" > "$GITHUB_WORKSPACE/stage176-output/SHA256SUMS.txt"
+          mkdir -p "$GITHUB_WORKSPACE/stage177-output"
+          cp "$APK" "$GITHUB_WORKSPACE/stage177-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE177_DEBUG.apk"
+          sha256sum "$GITHUB_WORKSPACE/stage177-output/SONGDNA_SMART_STUDIO_7_0_0_STAGE177_DEBUG.apk" > "$GITHUB_WORKSPACE/stage177-output/SHA256SUMS.txt"
+          {
+            echo '## SONGDNA SMART STUDIO 7.0.0 — Stage177'
+            echo ''
+            echo '- Source archive extracted and verified.'
+            echo '- 133 JavaScript regression files passed.'
+            echo '- 7 Python/browser regression files passed.'
+            echo '- Android debug APK generated.'
+            echo '- SHA-256 checksum generated.'
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Stage176 APK çıktısını GitHub Actions artifact olarak yükle
+      - name: Upload Stage177 APK and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.0.0-STAGE176-DEBUG-APK
-          path: stage176-output/*
+          name: SONGDNA-SMART-STUDIO-7.0.0-STAGE177-ANDROID-DEBUG
+          path: stage177-output/*
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
           
