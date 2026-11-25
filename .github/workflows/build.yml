@@ -1,23 +1,23 @@
 
-name: SONGDNA SMART STUDIO 7.5.0 - Stage184 Android Build
+name: SONGDNA SMART STUDIO 7.5.0 - Stage185 Android Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - '**/*STAGE184*.zip'
+      - 'SONGDNA_SMART_STUDIO_7_5_0_STAGE185_KAYNAK_PAKETI.zip'
       - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage184-${{ github.ref }}
+  group: songdna-stage185-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Stage184 Tests and Android APK Build
+  verify-and-build:
+    name: Verify Stage185 source and build Android APK
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -41,61 +41,34 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Gradle
+      - name: Install Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Find and extract Stage184 source package
+      - name: Extract Stage185 source archive
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Searching for Stage184 ZIP..."
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_5_0_STAGE185_KAYNAK_PAKETI.zip"
 
-          ZIP_FILE="$(find "$GITHUB_WORKSPACE" \
-            -type f \
-            -iname '*STAGE184*.zip' \
-            -print -quit)"
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "::error::Stage184 ZIP package not found."
-            find "$GITHUB_WORKSPACE" -type f -iname '*.zip'
-            exit 1
-          fi
-
-          echo "Package found: $ZIP_FILE"
+          test -s "$ZIP_FILE"
 
           mkdir -p "$GITHUB_WORKSPACE/source"
 
           unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
 
-          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_5_0_STAGE184"
+          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_5_0_STAGE185"
 
-          if [ ! -d "$SOURCE_DIR" ]; then
-            SOURCE_DIR="$(find "$GITHUB_WORKSPACE/source" \
-              -type f \
-              -path '*/backend/server.js' \
-              -print -quit | xargs -r dirname | xargs -r dirname)"
-          fi
-
-          if [ -z "$SOURCE_DIR" ] || [ ! -d "$SOURCE_DIR" ]; then
-            echo "::error::Could not identify extracted source directory."
-            find "$GITHUB_WORKSPACE/source" -maxdepth 4 -type f | head -100
-            exit 1
-          fi
-
-          test -f "$SOURCE_DIR/backend/server.js"
-          test -f "$SOURCE_DIR/backend/package.json"
+          test -d "$SOURCE_DIR"
           test -f "$SOURCE_DIR/requirements-test.txt"
+          test -f "$SOURCE_DIR/backend/server.js"
           test -f "$SOURCE_DIR/android-wrapper/app/build.gradle.kts"
-          test -f "$SOURCE_DIR/android-wrapper/settings.gradle.kts"
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
-          echo "Stage184 source package verified."
-
-      - name: Install Python dependencies
+      - name: Install Python browser-test dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -106,11 +79,11 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Check backend JavaScript
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm --prefix "$SOURCE_DIR/backend" run check
+      - name: Verify source and Android asset integrity
+        run: python "$SOURCE_DIR/scripts/verify-source.py"
+
+      - name: Verify backend JavaScript syntax
+        run: npm --prefix "$SOURCE_DIR/backend" run check
 
       - name: Run JavaScript regression tests
         shell: bash
@@ -120,54 +93,41 @@ jobs:
           cd "$SOURCE_DIR"
 
           mapfile -d '' TESTS < <(
-            find scripts -maxdepth 1 -type f \
-              -name 'test-*.js' -print0 | sort -z
+            find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z
           )
 
-          echo "Found ${#TESTS[@]} JavaScript test files."
+          echo "JavaScript regression files found: ${#TESTS[@]}"
 
-          if [ "${#TESTS[@]}" -eq 0 ]; then
-            echo "::error::No JavaScript regression tests found."
-            exit 1
-          fi
+          test "${#TESTS[@]}" -eq 142
 
           for TEST_FILE in "${TESTS[@]}"; do
-            echo "Running $TEST_FILE"
+            echo "--- Running: $TEST_FILE"
             node "$TEST_FILE"
           done
 
-      - name: Run Python preflight
+      - name: Run Python preflight and browser regression tests
         shell: bash
         run: |
           set -euo pipefail
+
           cd "$SOURCE_DIR"
+
           python scripts/ci-preflight.py
 
-      - name: Run all 7 Python regression tests
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          cd "$SOURCE_DIR"
-
           mapfile -d '' TESTS < <(
-            find scripts -maxdepth 1 -type f \
-              -name 'test-*.py' -print0 | sort -z
+            find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z
           )
 
-          echo "Found ${#TESTS[@]} Python test files."
+          echo "Python regression files found: ${#TESTS[@]}"
 
-          if [ "${#TESTS[@]}" -ne 7 ]; then
-            echo "::error::Expected 7 Python test files, found ${#TESTS[@]}."
-            exit 1
-          fi
+          test "${#TESTS[@]}" -eq 7
 
           for TEST_FILE in "${TESTS[@]}"; do
-            echo "Running $TEST_FILE"
+            echo "--- Running: $TEST_FILE"
             python "$TEST_FILE"
           done
 
-      - name: Build Android Debug APK
+      - name: Build Android debug APK
         shell: bash
         run: |
           set -euo pipefail
@@ -176,51 +136,44 @@ jobs:
 
           gradle :app:assembleDebug \
             --no-daemon \
-            --stacktrace
+            --stacktrace \
+            --warning-mode all
 
-      - name: Verify APK and create checksum
+      - name: Verify APK and generate SHA-256
         shell: bash
         run: |
           set -euo pipefail
 
           APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
-          if [ ! -s "$APK" ]; then
-            echo "::error::Android APK was not generated."
-            exit 1
-          fi
+          test -s "$APK"
 
-          mkdir -p "$GITHUB_WORKSPACE/stage184-output"
+          mkdir -p "$GITHUB_WORKSPACE/stage185-output"
 
           cp "$APK" \
-            "$GITHUB_WORKSPACE/stage184-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE184.apk"
+            "$GITHUB_WORKSPACE/stage185-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE185_DEBUG.apk"
 
-          cd "$GITHUB_WORKSPACE/stage184-output"
+          sha256sum \
+            "$GITHUB_WORKSPACE/stage185-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE185_DEBUG.apk" \
+            > "$GITHUB_WORKSPACE/stage185-output/SHA256SUMS.txt"
 
-          sha256sum SONGDNA_SMART_STUDIO_7_5_0_STAGE184.apk \
-            > SHA256SUMS.txt
-
-          echo "APK successfully generated."
-
-      - name: Publish build summary
-        if: always()
-        shell: bash
-        run: |
           {
-            echo "## SONGDNA SMART STUDIO 7.5.0 - Stage184"
-            echo ""
-            echo "- Source package: Stage184"
-            echo "- Backend check: completed if previous step passed"
-            echo "- JavaScript tests: completed if previous step passed"
-            echo "- Python tests: completed if previous step passed"
-            echo "- Android APK: see build result"
+            echo '## SONGDNA SMART STUDIO 7.5.0 - Stage185'
+            echo ''
+            echo '- Stage185 source archive extracted.'
+            echo '- Source integrity verification completed.'
+            echo '- Backend JavaScript syntax checked.'
+            echo '- 142 JavaScript regression files executed.'
+            echo '- 7 Python regression files executed.'
+            echo '- Android debug APK generated.'
+            echo '- SHA-256 checksum generated.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Android APK
+      - name: Upload Stage185 APK and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE184-ANDROID-APK
-          path: stage184-output/*
+          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE185-ANDROID-DEBUG
+          path: stage185-output/*
           if-no-files-found: error
           retention-days: 30
           
