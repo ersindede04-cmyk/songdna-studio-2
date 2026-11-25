@@ -1,74 +1,77 @@
 
-name: SONGDNA SMART STUDIO - Android Build
+name: SONGDNA SMART STUDIO 7.1.0 - Stage180 Full Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'SONGDNA_SMART_STUDIO_7_0_0_STAGE179_KAYNAK.zip'
-      - '.github/workflows/build.yml'
+      - 'SONGDNA_SMART_STUDIO_7_1_0_STAGE180_KAYNAK.zip'
+      - '.github/workflows/SONGDNA_STAGE180.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-android-${{ github.ref }}
+  group: songdna-stage180-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verify-and-build:
-    name: Verify, Test and Build Android APK
+  build-and-test:
+    name: Stage180 Full Verification and APK Build
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
     steps:
-      - name: Checkout repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Java 17
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Node.js 20
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install Python 3.11
+      - name: Setup Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Gradle 8.9
+      - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract source archive
+      - name: Extract Stage180 Source ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_0_0_STAGE179_KAYNAK.zip"
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_1_0_STAGE180_KAYNAK.zip"
 
-          test -s "$ZIP_FILE"
+          if [ ! -s "$ZIP_FILE" ]; then
+            echo "Stage180 ZIP file not found!"
+            exit 1
+          fi
 
           mkdir -p "$GITHUB_WORKSPACE/source"
 
           unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
 
-          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_0_0_STAGE177"
+          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_1_0_STAGE180"
 
-          test -d "$SOURCE_DIR"
-          test -f "$SOURCE_DIR/requirements-test.txt"
-          test -f "$SOURCE_DIR/scripts/verify-source.py"
-          test -d "$SOURCE_DIR/android-wrapper"
+          if [ ! -d "$SOURCE_DIR" ]; then
+            echo "Stage180 source directory not found!"
+            exit 1
+          fi
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
-      - name: Install Python test dependencies
+      - name: Install Python Test Dependencies
         shell: bash
         run: |
           set -euo pipefail
@@ -79,15 +82,15 @@ jobs:
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Verify source integrity
+      - name: Verify Stage180 Source Integrity
         run: |
           python "$SOURCE_DIR/scripts/verify-source.py"
 
-      - name: Check backend JavaScript
+      - name: Verify Backend JavaScript Syntax
         run: |
           npm --prefix "$SOURCE_DIR/backend" run check
 
-      - name: Run JavaScript regression tests
+      - name: Run 139 JavaScript Regression Tests
         shell: bash
         run: |
           set -euo pipefail
@@ -95,31 +98,32 @@ jobs:
           cd "$SOURCE_DIR"
 
           mapfile -d '' TESTS < <(
-            find tests scripts \
-              -maxdepth 1 \
-              -type f \
-              -name '*.js' \
-              -print0 | sort -z
+            find tests scripts -maxdepth 1 \
+              -type f -name '*.js' -print0 | sort -z
           )
 
-          echo "JavaScript test files: ${#TESTS[@]}"
+          echo "JavaScript tests: ${#TESTS[@]}"
 
-          test "${#TESTS[@]}" -gt 0
+          if [ "${#TESTS[@]}" -ne 139 ]; then
+            echo "Unexpected JavaScript test count!"
+            exit 1
+          fi
 
           for TEST_FILE in "${TESTS[@]}"; do
             echo "Running: $TEST_FILE"
             node "$TEST_FILE"
           done
 
-      - name: Run CI preflight
+      - name: Run Python Preflight
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$SOURCE_DIR"
+
           python scripts/ci-preflight.py
 
-      - name: Run Python regression tests
+      - name: Run 7 Python Browser Regression Tests
         shell: bash
         run: |
           set -euo pipefail
@@ -127,16 +131,16 @@ jobs:
           cd "$SOURCE_DIR"
 
           mapfile -d '' TESTS < <(
-            find scripts \
-              -maxdepth 1 \
-              -type f \
-              -name 'test-*.py' \
-              -print0 | sort -z
+            find scripts -maxdepth 1 \
+              -type f -name 'test-*.py' -print0 | sort -z
           )
 
-          echo "Python test files: ${#TESTS[@]}"
+          echo "Python tests: ${#TESTS[@]}"
 
-          test "${#TESTS[@]}" -gt 0
+          if [ "${#TESTS[@]}" -ne 7 ]; then
+            echo "Unexpected Python test count!"
+            exit 1
+          fi
 
           for TEST_FILE in "${TESTS[@]}"; do
             echo "Running: $TEST_FILE"
@@ -155,42 +159,54 @@ jobs:
             --stacktrace \
             --warning-mode all
 
-      - name: Verify APK and generate checksum
+      - name: Verify APK and Generate SHA256
         shell: bash
         run: |
           set -euo pipefail
 
           APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
-          test -s "$APK"
+          if [ ! -s "$APK" ]; then
+            echo "APK build failed!"
+            exit 1
+          fi
 
-          mkdir -p "$GITHUB_WORKSPACE/android-output"
+          mkdir -p "$GITHUB_WORKSPACE/stage180-output"
 
           cp "$APK" \
-            "$GITHUB_WORKSPACE/android-output/SONGDNA_SMART_STUDIO_7_0_0_DEBUG.apk"
+            "$GITHUB_WORKSPACE/stage180-output/SONGDNA_SMART_STUDIO_7_1_0_STAGE180_DEBUG.apk"
 
-          cd "$GITHUB_WORKSPACE/android-output"
+          cd "$GITHUB_WORKSPACE/stage180-output"
 
-          sha256sum SONGDNA_SMART_STUDIO_7_0_0_DEBUG.apk \
+          sha256sum SONGDNA_SMART_STUDIO_7_1_0_STAGE180_DEBUG.apk \
             > SHA256SUMS.txt
 
+          echo "Stage180 APK successfully generated."
+
+      - name: Publish Build Summary
+        if: always()
+        run: |
           {
-            echo "## SONGDNA SMART STUDIO Android Build"
+            echo "# SONGDNA SMART STUDIO 7.1.0"
+            echo "## Stage180 Build Report"
             echo ""
-            echo "- Source archive extracted."
-            echo "- Source verification passed."
-            echo "- Backend syntax check passed."
-            echo "- JavaScript regression tests passed."
-            echo "- Python preflight and regression tests passed."
-            echo "- Android debug APK generated."
-            echo "- SHA-256 checksum generated."
+            echo "- Source: Stage180"
+            echo "- Version: 7.1.0"
+            echo "- Android versionCode: 40"
+            echo "- Backend: Node.js 20"
+            echo "- JavaScript regression target: 139"
+            echo "- Python regression target: 7"
+            echo "- Android APK: Debug"
+            echo ""
+            echo "See individual workflow steps for actual test results."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Android APK
+      - name: Upload Stage180 APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-ANDROID-DEBUG
-          path: android-output/*
+          name: SONGDNA-SMART-STUDIO-7.1.0-STAGE180-ANDROID
+          path: stage180-output/
           if-no-files-found: error
           retention-days: 30
           
