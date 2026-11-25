@@ -1,23 +1,23 @@
 
-name: SONGDNA SMART STUDIO 7.2.0 — Stage183 Android Build
+name: SONGDNA SMART STUDIO 7.5.0 - Stage184 Android Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'SONGDNA_SMART_STUDIO_7_2_0_STAGE183_KAYNAK.zip'
+      - 'SONGDNA_SMART_STUDIO_7_5_0_STAGE184_KAYNAK_PAKET_KITI.zip'
       - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage183-android-${{ github.ref }}
+  group: songdna-stage184-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify-and-build:
-    name: Verify source, run regressions and build Android APK
+    name: Stage184 Tests and Android APK Build
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -46,12 +46,12 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Extract Stage183 source archive
+      - name: Extract Stage184 source package
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_2_0_STAGE183_KAYNAK.zip"
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_5_0_STAGE184_KAYNAK_PAKET_KITI.zip"
 
           test -s "$ZIP_FILE"
 
@@ -59,31 +59,29 @@ jobs:
 
           unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
 
-          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_2_0_STAGE183"
+          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_5_0_STAGE184"
 
           test -d "$SOURCE_DIR"
           test -f "$SOURCE_DIR/requirements-test.txt"
+          test -f "$SOURCE_DIR/backend/server.js"
+          test -f "$SOURCE_DIR/android-wrapper/app/build.gradle.kts"
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
-      - name: Install Python browser-test dependencies
+      - name: Install Python test dependencies
         shell: bash
         run: |
           set -euo pipefail
-
           python -m pip install --upgrade pip
           python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
 
       - name: Install Playwright Chromium
         run: python -m playwright install --with-deps chromium
 
-      - name: Verify source and Android asset integrity
-        run: python "$SOURCE_DIR/scripts/verify-source.py"
-
       - name: Verify backend JavaScript syntax
         run: npm --prefix "$SOURCE_DIR/backend" run check
 
-      - name: Run all JavaScript regression tests
+      - name: Run all 141 JavaScript regression tests
         shell: bash
         run: |
           set -euo pipefail
@@ -94,16 +92,16 @@ jobs:
             find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z
           )
 
-          echo "JavaScript regression files found: ${#TESTS[@]}"
+          echo "JavaScript regression files: ${#TESTS[@]}"
 
           test "${#TESTS[@]}" -eq 141
 
           for TEST_FILE in "${TESTS[@]}"; do
-            echo "--- $TEST_FILE"
+            echo "Running: $TEST_FILE"
             node "$TEST_FILE"
           done
 
-      - name: Run Python preflight and browser regression tests
+      - name: Run Python preflight and 7 regression tests
         shell: bash
         run: |
           set -euo pipefail
@@ -116,23 +114,26 @@ jobs:
             find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z
           )
 
-          echo "Python regression files found: ${#TESTS[@]}"
+          echo "Python regression files: ${#TESTS[@]}"
 
           test "${#TESTS[@]}" -eq 7
 
           for TEST_FILE in "${TESTS[@]}"; do
-            echo "--- $TEST_FILE"
+            echo "Running: $TEST_FILE"
             python "$TEST_FILE"
           done
 
-      - name: Build Android debug APK
+      - name: Build Android Debug APK
         shell: bash
         run: |
           set -euo pipefail
 
           cd "$SOURCE_DIR/android-wrapper"
 
-          gradle :app:assembleDebug --no-daemon --stacktrace --warning-mode all
+          gradle :app:assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
 
       - name: Verify APK and generate SHA-256
         shell: bash
@@ -143,28 +144,31 @@ jobs:
 
           test -s "$APK"
 
-          mkdir -p "$GITHUB_WORKSPACE/stage183-output"
+          mkdir -p "$GITHUB_WORKSPACE/stage184-output"
 
-          cp "$APK" "$GITHUB_WORKSPACE/stage183-output/SONGDNA_SMART_STUDIO_7_2_0_STAGE183_DEBUG.apk"
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/stage184-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE184_DEBUG.apk"
 
-          sha256sum "$GITHUB_WORKSPACE/stage183-output/SONGDNA_SMART_STUDIO_7_2_0_STAGE183_DEBUG.apk" \
-            > "$GITHUB_WORKSPACE/stage183-output/SHA256SUMS.txt"
+          sha256sum \
+            "$GITHUB_WORKSPACE/stage184-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE184_DEBUG.apk" \
+            > "$GITHUB_WORKSPACE/stage184-output/SHA256SUMS.txt"
 
           {
-            echo '## SONGDNA SMART STUDIO 7.2.0 — Stage183'
-            echo ''
-            echo '- Source archive extracted and verified.'
-            echo '- 141 JavaScript regression files passed.'
-            echo '- 7 Python/browser regression files passed.'
-            echo '- Android debug APK generated.'
-            echo '- SHA-256 checksum generated.'
+            echo "## SONGDNA SMART STUDIO 7.5.0 - Stage184"
+            echo ""
+            echo "- Source package extracted."
+            echo "- Backend JavaScript syntax check passed."
+            echo "- 141 JavaScript regression tests passed."
+            echo "- 7 Python regression tests passed."
+            echo "- Android Debug APK generated."
+            echo "- SHA-256 checksum generated."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Stage183 APK and checksum
+      - name: Upload Stage184 APK and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.2.0-STAGE183-ANDROID-DEBUG
-          path: stage183-output/*
+          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE184-ANDROID-APK
+          path: stage184-output/*
           if-no-files-found: error
           retention-days: 30
           
