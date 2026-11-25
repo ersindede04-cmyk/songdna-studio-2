@@ -1,18 +1,18 @@
 
-name: SONGDNA SMART STUDIO 7.1.0 — Stage182 Android Build
+name: SONGDNA SMART STUDIO 7.2.0 — Stage183 Android Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'SONGDNA_SMART_STUDIO_7_1_0_STAGE182_KAYNAK.zip'
+      - 'SONGDNA_SMART_STUDIO_7_2_0_STAGE183_KAYNAK.zip'
       - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage182-android-${{ github.ref }}
+  group: songdna-stage183-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -20,6 +20,7 @@ jobs:
     name: Verify source, run regressions and build Android APK
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+
     steps:
       - name: Checkout GitHub repository
         uses: actions/checkout@v4
@@ -45,23 +46,31 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Extract Stage182 source archive
+      - name: Extract Stage183 source archive
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_1_0_STAGE182_KAYNAK.zip"
+
+          ZIP_FILE="$GITHUB_WORKSPACE/SONGDNA_SMART_STUDIO_7_2_0_STAGE183_KAYNAK.zip"
+
           test -s "$ZIP_FILE"
+
           mkdir -p "$GITHUB_WORKSPACE/source"
+
           unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
-          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_1_0_STAGE182"
+
+          SOURCE_DIR="$GITHUB_WORKSPACE/source/SONGDNA_SMART_STUDIO_7_2_0_STAGE183"
+
           test -d "$SOURCE_DIR"
           test -f "$SOURCE_DIR/requirements-test.txt"
+
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
       - name: Install Python browser-test dependencies
         shell: bash
         run: |
           set -euo pipefail
+
           python -m pip install --upgrade pip
           python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
 
@@ -78,10 +87,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           cd "$SOURCE_DIR"
-          mapfile -d '' TESTS < <(find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z)
+
+          mapfile -d '' TESTS < <(
+            find tests scripts -maxdepth 1 -type f -name '*.js' -print0 | sort -z
+          )
+
           echo "JavaScript regression files found: ${#TESTS[@]}"
+
           test "${#TESTS[@]}" -eq 141
+
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- $TEST_FILE"
             node "$TEST_FILE"
@@ -91,11 +107,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           cd "$SOURCE_DIR"
+
           python scripts/ci-preflight.py
-          mapfile -d '' TESTS < <(find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z)
+
+          mapfile -d '' TESTS < <(
+            find scripts -maxdepth 1 -type f -name 'test-*.py' -print0 | sort -z
+          )
+
           echo "Python regression files found: ${#TESTS[@]}"
+
           test "${#TESTS[@]}" -eq 7
+
           for TEST_FILE in "${TESTS[@]}"; do
             echo "--- $TEST_FILE"
             python "$TEST_FILE"
@@ -105,20 +129,29 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           cd "$SOURCE_DIR/android-wrapper"
+
           gradle :app:assembleDebug --no-daemon --stacktrace --warning-mode all
 
       - name: Verify APK and generate SHA-256
         shell: bash
         run: |
           set -euo pipefail
+
           APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+
           test -s "$APK"
-          mkdir -p "$GITHUB_WORKSPACE/stage182-output"
-          cp "$APK" "$GITHUB_WORKSPACE/stage182-output/SONGDNA_SMART_STUDIO_7_1_0_STAGE182_DEBUG.apk"
-          sha256sum "$GITHUB_WORKSPACE/stage182-output/SONGDNA_SMART_STUDIO_7_1_0_STAGE182_DEBUG.apk" > "$GITHUB_WORKSPACE/stage182-output/SHA256SUMS.txt"
+
+          mkdir -p "$GITHUB_WORKSPACE/stage183-output"
+
+          cp "$APK" "$GITHUB_WORKSPACE/stage183-output/SONGDNA_SMART_STUDIO_7_2_0_STAGE183_DEBUG.apk"
+
+          sha256sum "$GITHUB_WORKSPACE/stage183-output/SONGDNA_SMART_STUDIO_7_2_0_STAGE183_DEBUG.apk" \
+            > "$GITHUB_WORKSPACE/stage183-output/SHA256SUMS.txt"
+
           {
-            echo '## SONGDNA SMART STUDIO 7.1.0 — Stage182'
+            echo '## SONGDNA SMART STUDIO 7.2.0 — Stage183'
             echo ''
             echo '- Source archive extracted and verified.'
             echo '- 141 JavaScript regression files passed.'
@@ -127,11 +160,11 @@ jobs:
             echo '- SHA-256 checksum generated.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Stage182 APK and checksum
+      - name: Upload Stage183 APK and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.1.0-STAGE182-ANDROID-DEBUG
-          path: stage182-output/*
+          name: SONGDNA-SMART-STUDIO-7.2.0-STAGE183-ANDROID-DEBUG
+          path: stage183-output/*
           if-no-files-found: error
           retention-days: 30
           
