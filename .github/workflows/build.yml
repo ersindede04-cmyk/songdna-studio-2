@@ -1,28 +1,72 @@
 
-      - name: Find and extract Stage185 source archive
+name: SONGDNA SMART STUDIO 7.5.0 - Stage185 Android Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'SONGDNA_SMART_STUDIO_7_5_0_STAGE185_KAYNAK_PAKETI.zip'
+      - '.github/workflows/build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: songdna-stage185-android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-and-build:
+    name: Verify Stage185 source and build Android APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout GitHub repository
+        uses: actions/checkout@v4
+
+      - name: Install Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Find and extract exact Stage185 ZIP
         shell: bash
         run: |
           set -euo pipefail
 
           ZIP_NAME="SONGDNA_SMART_STUDIO_7_5_0_STAGE185_KAYNAK_PAKETI.zip"
+          ZIP_FILE="$GITHUB_WORKSPACE/$ZIP_NAME"
 
-          mapfile -t ZIP_FILES < <(
-            find "$GITHUB_WORKSPACE" \
-              -type f \
-              -name "$ZIP_NAME" \
-              -print
-          )
+          echo "Checking exact Stage185 archive..."
 
-          if [ "${#ZIP_FILES[@]}" -ne 1 ]; then
-            echo "ERROR: Expected exactly one Stage185 ZIP."
-            echo "Found: ${#ZIP_FILES[@]}"
-            printf '%s\n' "${ZIP_FILES[@]}"
+          if [ ! -s "$ZIP_FILE" ]; then
+            echo "ERROR: Exact Stage185 ZIP not found in repository root."
+            echo "Expected filename: $ZIP_NAME"
+            echo "Available ZIP files:"
+            find "$GITHUB_WORKSPACE" -maxdepth 2 -type f -iname '*.zip' -print
             exit 1
           fi
 
           mkdir -p "$GITHUB_WORKSPACE/source"
 
-          unzip -q "${ZIP_FILES[0]}" -d "$GITHUB_WORKSPACE/source"
+          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
 
           REQUIREMENTS_FILE="$(
             find "$GITHUB_WORKSPACE/source" \
@@ -31,15 +75,178 @@
               -print -quit
           )"
 
-          test -n "$REQUIREMENTS_FILE"
+          if [ -z "$REQUIREMENTS_FILE" ]; then
+            echo "ERROR: Project root could not be detected."
+            exit 1
+          fi
 
           SOURCE_DIR="$(dirname "$REQUIREMENTS_FILE")"
 
           test -f "$SOURCE_DIR/backend/server.js"
+          test -f "$SOURCE_DIR/backend/package.json"
           test -f "$SOURCE_DIR/android-wrapper/app/build.gradle.kts"
           test -f "$SOURCE_DIR/scripts/verify-source.py"
+          test -f "$SOURCE_DIR/BUILD_PACKAGE_MANIFEST_STAGE185.json"
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
           echo "Stage185 source successfully extracted."
+          echo "Project directory: $SOURCE_DIR"
+
+      - name: Verify Stage185 package identity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - "$SOURCE_DIR/BUILD_PACKAGE_MANIFEST_STAGE185.json" <<'PY'
+          import json
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, encoding="utf-8") as file:
+              manifest = json.load(file)
+
+          assert manifest.get("package_stage") == 185, "Wrong package stage"
+          assert manifest.get("application_version") == "7.5.0", "Wrong app version"
+
+          backend = manifest.get("backend", {})
+          assert backend.get("health_stage") == 185, "Wrong backend health stage"
+          assert backend.get("story_blend_endpoint") == "POST /api/story-blend"
+
+          print("PASS: Stage185 package identity verified.")
+          PY
+
+      - name: Install Python test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install --upgrade pip
+          python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Verify source and Android asset integrity
+        run: python "$SOURCE_DIR/scripts/verify-source.py"
+
+      - name: Verify backend JavaScript syntax
+        run: npm --prefix "$SOURCE_DIR/backend" run check
+
+      - name: Run JavaScript regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$SOURCE_DIR"
+
+          mapfile -d '' TESTS < <(
+            find tests scripts \
+              -maxdepth 1 \
+              -type f \
+              -name '*.js' \
+              -print0 | sort -z
+          )
+
+          echo "JavaScript test files found: ${#TESTS[@]}"
+
+          if [ "${#TESTS[@]}" -eq 0 ]; then
+            echo "ERROR: No JavaScript regression tests found."
+            exit 1
+          fi
+
+          for TEST_FILE in "${TESTS[@]}"; do
+            echo "Running: $TEST_FILE"
+            node "$TEST_FILE"
+          done
+
+          echo "PASS: All discovered JavaScript regression tests completed."
+
+      - name: Run Python preflight and browser regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$SOURCE_DIR"
+
+          python scripts/ci-preflight.py
+
+          mapfile -d '' TESTS < <(
+            find scripts \
+              -maxdepth 1 \
+              -type f \
+              -name 'test-*.py' \
+              -print0 | sort -z
+          )
+
+          echo "Python regression files found: ${#TESTS[@]}"
+
+          if [ "${#TESTS[@]}" -eq 0 ]; then
+            echo "ERROR: No Python regression tests found."
+            exit 1
+          fi
+
+          for TEST_FILE in "${TESTS[@]}"; do
+            echo "Running: $TEST_FILE"
+            python "$TEST_FILE"
+          done
+
+          echo "PASS: All discovered Python regression tests completed."
+
+      - name: Build Android debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$SOURCE_DIR/android-wrapper"
+
+          gradle :app:assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            --warning-mode all
+
+      - name: Verify APK and generate SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="$SOURCE_DIR/android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "ERROR: Android APK was not generated."
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/stage185-output"
+
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/stage185-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE185_DEBUG.apk"
+
+          sha256sum \
+            "$GITHUB_WORKSPACE/stage185-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE185_DEBUG.apk" \
+            > "$GITHUB_WORKSPACE/stage185-output/SHA256SUMS.txt"
+
+          echo "PASS: APK exists and SHA-256 checksum generated."
+
+          {
+            echo "## SONGDNA SMART STUDIO 7.5.0 - Stage185"
+            echo ""
+            echo "- Exact Stage185 source archive extracted."
+            echo "- Stage185 package identity verified."
+            echo "- Source and Android asset integrity checked."
+            echo "- Backend JavaScript syntax checked."
+            echo "- JavaScript regression tests executed."
+            echo "- Python and browser regression tests executed."
+            echo "- Android debug APK generated."
+            echo "- SHA-256 checksum generated."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Stage185 APK and checksum
+        uses: actions/upload-artifact@v4
+        with:
+          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE185-ANDROID-DEBUG
+          path: stage185-output/*
+          if-no-files-found: error
+          retention-days: 30
           
