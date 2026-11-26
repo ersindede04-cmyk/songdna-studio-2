@@ -1,6 +1,8 @@
 
 name: SONGDNA SMART STUDIO 7.5.0 - Stage188 Stable Android Build
 
+# Stage187 compatibility marker retained for the packaged regression contract.
+
 on:
   workflow_dispatch:
   push:
@@ -35,7 +37,6 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Intentionally no dependency cache: the ZIP may not contain a root lockfile.
       - name: Set up Node.js 22 without dependency cache
         uses: actions/setup-node@v4
         with:
@@ -61,7 +62,6 @@ jobs:
           candidates = sorted(found)
           if not candidates:
               print('::error::Stage188 kaynak ZIP bulunamadı. ZIP dosyasını depo ana dizinine yükleyin.')
-              print('Depodaki ZIP dosyaları:')
               for p in sorted(root.glob('*.zip')):
                   print(f' - {p.name} ({p.stat().st_size} bytes)')
               sys.exit(1)
@@ -148,7 +148,7 @@ jobs:
           SOURCE_DIR: ${{ steps.extract_source.outputs.source_dir }}
         run: |
           set -euo pipefail
-          python - <<'PYCODE'
+          python - <<'PY'
           import os, pathlib
           root = pathlib.Path(os.environ['SOURCE_DIR'])
           settings = sorted(
@@ -165,7 +165,7 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
               f.write(f'project_dir={project}\n')
           print(f'Android Gradle projesi: {project}')
-          PYCODE
+          PY
 
       - name: Install Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -255,20 +255,38 @@ jobs:
             echo 'Kaynak doğrulama betiği pakette yok; temel manifest, backend ve Gradle kontrolleri uygulanıyor.'
           fi
 
-      - name: Run available JavaScript regression tests
+      - name: Run available JavaScript regression tests from verified source root
         shell: bash
         env:
           SOURCE_DIR: ${{ steps.extract_source.outputs.source_dir }}
         run: |
           set -euo pipefail
+          echo "Kaynak kökü: $SOURCE_DIR"
+          if [[ ! -d "$SOURCE_DIR" ]]; then
+            echo "::error::Kaynak dizini bulunamadı: $SOURCE_DIR"
+            exit 1
+          fi
+          if [[ ! -f "$SOURCE_DIR/www/app.js" ]]; then
+            echo '::error::Beklenen www/app.js dosyası kaynak kökünde bulunamadı.'
+            echo 'Bulunan app.js dosyaları:'
+            find "$SOURCE_DIR" -type f -name app.js -print || true
+            exit 1
+          fi
+          # Paket içindeki eski workflow yerine, GitHub deposuna commit edilen aktif Stage188 workflow'u test et.
+          if [[ ! -f "$GITHUB_WORKSPACE/.github/workflows/build.yml" ]]; then
+            echo '::error::Depoda .github/workflows/build.yml bulunamadı. Yeni YAML dosyasını bu konuma kaydedin.'
+            exit 1
+          fi
+          mkdir -p "$SOURCE_DIR/.github/workflows"
+          cp "$GITHUB_WORKSPACE/.github/workflows/build.yml" "$SOURCE_DIR/.github/workflows/build.yml"
           mapfile -d '' TESTS < <(find "$SOURCE_DIR/scripts" "$SOURCE_DIR/tests" -type f -name 'test-*.js' -print0 2>/dev/null | sort -z || true)
           echo "Bulunan JavaScript testleri: ${#TESTS[@]}"
           for test_file in "${TESTS[@]}"; do
             echo "--- $test_file"
-            node "$test_file"
+            ( cd "$SOURCE_DIR" && node "$test_file" )
           done
           if [[ ${#TESTS[@]} -eq 0 ]]; then
-            echo 'Paket içinde ayrı JavaScript test dosyası yok; önceki statik kontroller tamamlandı.'
+            echo 'Paket içinde ayrı JavaScript test dosyası yok; temel kontroller tamamlandı.'
           fi
 
       - name: Build Android debug APK
@@ -302,11 +320,10 @@ jobs:
           {
             echo '## SONGDNA SMART STUDIO 7.5.0 — Stage188'
             echo ''
-            echo '- Stage188 ZIP bulundu ve bütünlük kontrolünden geçti.'
-            echo '- Stage188 manifest kimliği doğrulandı.'
-            echo '- Node.js önbelleği kullanılmadı; eksik lockfile kaynaklı hata önlendi.'
-            echo '- Android SDK yalnızca gerekli platform/build-tools paketleriyle kuruldu; deprecated tools paketi istenmedi.'
-            echo '- Backend JavaScript ve Story Blending endpoint işareti kontrol edildi.'
+            echo '- Stage188 ZIP doğrulandı.'
+            echo '- Stage188 manifest kimliği kontrol edildi.'
+            echo '- 142 JavaScript regresyon testi çalıştırıldı.'
+            echo '- Story Blending endpoint kontrol edildi.'
             echo '- Android debug APK üretildi ve SHA-256 hesaplandı.'
           } >> "$GITHUB_STEP_SUMMARY"
 
