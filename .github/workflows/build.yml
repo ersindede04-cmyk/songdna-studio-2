@@ -167,7 +167,6 @@ jobs:
 
           assert manifest['render_deployment']['root_directory'] == 'backend'
           assert manifest['backend_contract']['health_stage'] == 191
-
           assert (
               (root / 'server.js').read_bytes()
               == (root / 'backend/server.js').read_bytes()
@@ -199,8 +198,13 @@ jobs:
             >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install browser regression dependencies
+        env:
+          SOURCE_DIR: ${{ steps.extract.outputs.source_dir }}
+        shell: bash
         run: |
           set -euo pipefail
+          cd "$SOURCE_DIR"
+          python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
           python -m playwright install --with-deps chromium
 
@@ -348,7 +352,7 @@ jobs:
             echo '## Stage191'
             echo ''
             echo '- Stage191 source and Render story-blend contract verified.'
-            echo '- Story blending focused regression tests passed.'
+            echo '- JavaScript and Python browser regression tests passed.'
             echo '- Android debug APK built and SHA-256 generated.'
           } >> "$GITHUB_STEP_SUMMARY"
 
