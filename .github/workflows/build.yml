@@ -1,25 +1,25 @@
 
-name: SONGDNA SMART STUDIO 7.5.0 - Stage191 Stable Build
+name: SONGDNA SMART STUDIO 7.5.0 - Stage192 Stable Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - '*STAGE191*KAYNAK*PAKETI*.zip'
-      - '*STAGE191*KAYNAK*.zip'
+      - '*STAGE192*KAYNAK*PAKETI*.zip'
+      - '*STAGE192*KAYNAK*.zip'
       - '.github/workflows/build.yml'
-      - '.github/workflows/songdna-stage191.yml'
+      - '.github/workflows/songdna-stage192.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage191-${{ github.ref }}
+  group: songdna-stage192-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   verify-and-build:
-    name: Verify Stage191 and build Android APK
+    name: Verify Stage192 and build Android APK
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -45,66 +45,39 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Locate and validate Stage191 ZIP
+      - name: Locate and validate Stage192 ZIP
         id: source_zip
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
-          import os
-          import pathlib
-          import zipfile
-
+          import os, pathlib, zipfile
           root = pathlib.Path(os.environ['GITHUB_WORKSPACE'])
           found = set()
-
-          for pattern in (
-              '*STAGE191*KAYNAK*PAKETI*.zip',
-              '*STAGE191*KAYNAK*.zip'
-          ):
+          for pattern in ('*STAGE192*KAYNAK*PAKETI*.zip', '*STAGE192*KAYNAK*.zip'):
               found.update(p for p in root.glob(pattern) if p.is_file())
-
           candidates = sorted(found)
-
           if len(candidates) != 1:
-              raise SystemExit(
-                  '::error::Depo ana dizininde tam olarak bir Stage191 kaynak ZIP bulunmalı. Bulunan: '
-                  + str([p.name for p in candidates])
-              )
-
+              raise SystemExit('Depoda tam olarak bir Stage192 kaynak ZIP bulunmalı: ' + str([p.name for p in candidates]))
           archive = candidates[0]
-
           with zipfile.ZipFile(archive) as z:
               bad = z.testzip()
               if bad:
                   raise SystemExit('ZIP CRC hatası: ' + bad)
-
               names = z.namelist()
-
               for name in names:
                   p = pathlib.PurePosixPath(name)
                   if p.is_absolute() or '..' in p.parts:
                       raise SystemExit('Güvensiz ZIP yolu: ' + name)
-
-              manifests = [
-                  n for n in names
-                  if pathlib.PurePosixPath(n).name
-                  == 'BUILD_PACKAGE_MANIFEST_STAGE191.json'
-              ]
-
+              manifests = [n for n in names if pathlib.PurePosixPath(n).name == 'BUILD_PACKAGE_MANIFEST_STAGE192.json']
               if len(manifests) != 1:
-                  raise SystemExit(
-                      'Stage191 manifest tam olarak bir adet olmalı'
-                  )
-
+                  raise SystemExit('Stage192 manifest tam olarak bir adet olmalı')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f'zip_path={archive}\n')
-              f.write(f'manifest_path={manifests[0]}\n')
-
-          print('ZIP CRC ve manifest varlığı doğrulandı:', archive.name)
+              f.write(f'zip_path={archive}\nmanifest_path={manifests[0]}\n')
+          print('Stage192 ZIP doğrulandı:', archive.name)
           PY
 
-      - name: Extract Stage191 source safely
+      - name: Extract Stage192 source safely
         id: extract
         shell: bash
         env:
@@ -113,66 +86,43 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import os
-          import pathlib
-          import zipfile
-          import json
-
-          dest = pathlib.Path(os.environ['RUNNER_TEMP']) / 'songdna-stage191'
+          import os, pathlib, zipfile, json
+          dest = pathlib.Path(os.environ['RUNNER_TEMP']) / 'songdna-stage192'
           dest.mkdir(parents=True, exist_ok=True)
-
           with zipfile.ZipFile(os.environ['ZIP_PATH']) as z:
               z.extractall(dest)
-
           manifest = dest / os.environ['MANIFEST_PATH']
           root = manifest.parent
           data = json.loads(manifest.read_text())
-
-          if data.get('package_stage') != 191:
-              raise SystemExit('Stage191 manifest kimliği geçersiz')
-
-          if data.get('application_version') != '7.5.0':
-              raise SystemExit('Uygulama sürümü 7.5.0 değil')
-
+          if data.get('package_stage') != 192 or data.get('application_version') != '7.5.0':
+              raise SystemExit('Stage192 manifest kimliği geçersiz')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f'source_dir={root}\n')
-
-          print('Stage191 kaynak:', root)
+          print('Stage192 kaynak:', root)
           PY
 
       - name: Verify backend and Render deployment contract
         env:
           SOURCE_DIR: ${{ steps.extract.outputs.source_dir }}
-        shell: bash
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
-
           node --check backend/server.js
           node --check server.js
-
           node tests/test-stage189-render-story-blend.js
+          node tests/test-stage192-dual-gemini-key-isolation.js
           node tests/test-stage181-story-api-integration.js
           node tests/test-stage179-story-blending.js
           node tests/test-stage179-story-lyrics-alignment.js
-
           python - <<'PY'
           from pathlib import Path
           import json
-
           root = Path('.')
-          manifest = json.loads(
-              (root / 'BUILD_PACKAGE_MANIFEST_STAGE191.json').read_text()
-          )
-
-          assert manifest['render_deployment']['root_directory'] == 'backend'
-          assert manifest['backend_contract']['health_stage'] == 191
-          assert (
-              (root / 'server.js').read_bytes()
-              == (root / 'backend/server.js').read_bytes()
-          )
-
-          print('Render/Stage191 deployment metadata verified')
+          m = json.loads((root / 'BUILD_PACKAGE_MANIFEST_STAGE192.json').read_text())
+          assert m['render_deployment']['root_directory'] == 'backend'
+          assert m['backend_contract']['health_stage'] == 192
+          assert (root / 'server.js').read_bytes() == (root / 'backend/server.js').read_bytes()
+          print('Render ve Stage192 metadata doğrulandı')
           PY
 
       - name: Run complete JavaScript regression suite
@@ -182,29 +132,17 @@ jobs:
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
-
-          mapfile -d '' TESTS < <(
-            find tests -type f -name '*.js' -print0 | sort -z
-          )
-
+          mapfile -d '' TESTS < <(find tests -type f -name '*.js' -print0 | sort -z)
           test "${#TESTS[@]}" -gt 0
-
           for test_file in "${TESTS[@]}"; do
             echo "--- $test_file"
             node "$test_file"
           done
-
-          echo "JavaScript regression files passed: ${#TESTS[@]}" \
-            >> "$GITHUB_STEP_SUMMARY"
+          echo "JavaScript test dosyaları: ${#TESTS[@]}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install browser regression dependencies
-        env:
-          SOURCE_DIR: ${{ steps.extract.outputs.source_dir }}
-        shell: bash
         run: |
           set -euo pipefail
-          cd "$SOURCE_DIR"
-          python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
           python -m playwright install --with-deps chromium
 
@@ -215,7 +153,6 @@ jobs:
         run: |
           set -euo pipefail
           cd "$SOURCE_DIR"
-
           for test_file in \
             scripts/test-stage166-interface-browser.py \
             scripts/test-stage170-workspace-browser.py \
@@ -223,14 +160,12 @@ jobs:
             scripts/test-stage30-3-output-layout.py \
             scripts/test-stage30-4-theme-persistence.py \
             scripts/test-stage31-scene-jargon-browser.py \
-            scripts/test-stage54-unified-menus.py
-          do
+            scripts/test-stage54-unified-menus.py \
+            scripts/test-stage192-ai-configuration-browser.py; do
             echo "--- $test_file"
             python "$test_file"
           done
-
-          echo "Python browser regression files passed: 7" \
-            >> "$GITHUB_STEP_SUMMARY"
+          echo "Python browser test dosyaları: 8" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Locate Android Gradle project
         id: android_project
@@ -240,38 +175,15 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
-          import os
-          import pathlib
-
+          import os, pathlib
           root = pathlib.Path(os.environ['SOURCE_DIR'])
-
-          settings = [
-              p for p in (
-                  list(root.rglob('settings.gradle'))
-                  + list(root.rglob('settings.gradle.kts'))
-              )
-              if 'node_modules' not in p.parts
-              and '.gradle' not in p.parts
-          ]
-
-          preferred = [
-              p for p in settings
-              if p.parent.name == 'android-wrapper'
-          ]
-
+          settings = [p for p in list(root.rglob('settings.gradle')) + list(root.rglob('settings.gradle.kts')) if 'node_modules' not in p.parts and '.gradle' not in p.parts]
+          preferred = [p for p in settings if p.parent.name == 'android-wrapper']
           options = preferred or settings
-
-          if (
-              len(options) != 1
-              or not (options[0].parent / 'app').is_dir()
-          ):
-              raise SystemExit(
-                  'Android Gradle projesi bulunamadı veya belirsiz'
-              )
-
+          if len(options) != 1 or not (options[0].parent / 'app').is_dir():
+              raise SystemExit('Android Gradle projesi bulunamadı veya belirsiz')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f'project_dir={options[0].parent}\n')
-
           print('Android project:', options[0].parent)
           PY
 
@@ -284,41 +196,19 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
-
-          test -d "$SDK_ROOT" || {
-            echo "::error::Android SDK bulunamadı: $SDK_ROOT"
-            exit 1
-          }
-
-          SDKMANAGER="$(
-            find "$SDK_ROOT/cmdline-tools" \
-              -type f -name sdkmanager 2>/dev/null \
-              | sort | tail -n 1
-          )"
-
-          test -n "$SDKMANAGER" || {
-            echo '::error::cmdline-tools/sdkmanager bulunamadı'
-            exit 1
-          }
-
+          test -d "$SDK_ROOT" || { echo "::error::Android SDK bulunamadı: $SDK_ROOT"; exit 1; }
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort | tail -n 1)"
+          test -n "$SDKMANAGER" || { echo '::error::cmdline-tools/sdkmanager bulunamadı'; exit 1; }
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
-
-          yes | "$SDKMANAGER" \
-            --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
-
-          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install \
-            'platform-tools' \
-            'platforms;android-35' \
-            'build-tools;35.0.0'
+          yes | "$SDKMANAGER" --sdk_root="$SDK_ROOT" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$SDK_ROOT" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0'
 
       - name: Build Android debug APK
         env:
           PROJECT_DIR: ${{ steps.android_project.outputs.project_dir }}
-        shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
@@ -327,40 +217,27 @@ jobs:
       - name: Verify APK and create checksum
         env:
           PROJECT_DIR: ${{ steps.android_project.outputs.project_dir }}
-        shell: bash
         run: |
           set -euo pipefail
-
           APK="$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk"
-
-          test -s "$APK" || {
-            echo '::error::APK bulunamadı'
-            exit 1
-          }
-
-          mkdir -p stage191-output
-
-          cp "$APK" \
-            stage191-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE191_DEBUG.apk
-
-          (
-            cd stage191-output
-            sha256sum *.apk > SHA256SUMS.txt
-          )
-
+          test -s "$APK" || { echo '::error::APK bulunamadı'; exit 1; }
+          mkdir -p stage192-output
+          cp "$APK" stage192-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE192_DEBUG.apk
+          (cd stage192-output && sha256sum *.apk > SHA256SUMS.txt)
           {
-            echo '## Stage191'
+            echo '## Stage192'
             echo ''
-            echo '- Stage191 source and Render story-blend contract verified.'
-            echo '- JavaScript and Python browser regression tests passed.'
-            echo '- Android debug APK built and SHA-256 generated.'
+            echo '- Stage192 kaynak ve Render sözleşmesi doğrulandı.'
+            echo '- Regresyon testleri tamamlandı.'
+            echo '- Android debug APK oluşturuldu.'
+            echo '- SHA-256 kontrol dosyası oluşturuldu.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Stage191 APK
+      - name: Upload Stage192 APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE191-ANDROID
-          path: stage191-output/*
+          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE192-ANDROID
+          path: stage192-output/*
           if-no-files-found: error
           retention-days: 30
           
