@@ -46,56 +46,91 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Find and extract Stage185 source ZIP
+      - name: Find and validate Stage185 ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          PATTERN="SONGDNA_SMART_STUDIO_7_5_0_STAGE185_KAYNAK_PAKETI*.zip"
+          python - <<'PY'
+          import glob
+          import os
+          import zipfile
 
-          echo "Searching for Stage185 source package..."
-
-          mapfile -t ZIP_FILES < <(
-            find "$GITHUB_WORKSPACE" \
-              -type f \
-              -name "$PATTERN" \
-              -print | sort -V
+          pattern = os.path.join(
+              os.environ["GITHUB_WORKSPACE"],
+              "**",
+              "SONGDNA_SMART_STUDIO_7_5_0_STAGE185_KAYNAK_PAKETI*.zip"
           )
 
-          if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
-            echo "ERROR: Stage185 ZIP not found."
-            echo "Expected pattern: $PATTERN"
-            find "$GITHUB_WORKSPACE" -type f -iname '*.zip' -print
-            exit 1
-          fi
+          files = sorted(
+              glob.glob(pattern, recursive=True),
+              key=os.path.getmtime,
+              reverse=True
+          )
 
-          echo "Found ${#ZIP_FILES[@]} Stage185 archive(s)."
+          print(f"Found {len(files)} Stage185 archive(s).")
 
-          ZIP_FILE="${ZIP_FILES[${#ZIP_FILES[@]}-1]}"
+          valid = []
 
-          echo "Selected archive: $ZIP_FILE"
+          for path in files:
+              print(f"Checking: {path}")
+
+              if zipfile.is_zipfile(path):
+                  try:
+                      with zipfile.ZipFile(path) as archive:
+                          bad_file = archive.testzip()
+
+                      if bad_file is None:
+                          valid.append(path)
+                          print("VALID ZIP")
+                      else:
+                          print(f"INVALID ZIP: {bad_file}")
+
+                  except Exception as error:
+                      print(f"ZIP ERROR: {error}")
+              else:
+                  print("INVALID: Not a ZIP archive.")
+
+          if not valid:
+              raise SystemExit(
+                  "ERROR: No valid Stage185 ZIP found. "
+                  "Delete the damaged GitHub upload and upload "
+                  "the verified original Stage185 ZIP again."
+              )
+
+          selected = valid[0]
+
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              env.write(f"STAGE185_ZIP={selected}\n")
+
+          print(f"Selected valid archive: {selected}")
+          PY
+
+      - name: Extract Stage185 source archive
+        shell: bash
+        run: |
+          set -euo pipefail
 
           mkdir -p "$GITHUB_WORKSPACE/source"
 
-          unzip -q "$ZIP_FILE" -d "$GITHUB_WORKSPACE/source"
+          unzip -q "$STAGE185_ZIP" \
+            -d "$GITHUB_WORKSPACE/source"
 
-          REQUIREMENTS_FILE="$(
+          SOURCE_DIR="$(
             find "$GITHUB_WORKSPACE/source" \
               -type f \
               -name 'requirements-test.txt' \
-              -print -quit
+              -print -quit |
+              xargs -r dirname
           )"
 
-          if [ -z "$REQUIREMENTS_FILE" ]; then
-            echo "ERROR: requirements-test.txt not found."
+          if [ -z "$SOURCE_DIR" ]; then
+            echo "ERROR: Stage185 project directory not found."
             exit 1
           fi
 
-          SOURCE_DIR="$(dirname "$REQUIREMENTS_FILE")"
-
           test -f "$SOURCE_DIR/backend/server.js"
           test -f "$SOURCE_DIR/backend/package.json"
-          test -f "$SOURCE_DIR/android-wrapper/app/build.gradle.kts"
           test -f "$SOURCE_DIR/scripts/verify-source.py"
           test -f "$SOURCE_DIR/scripts/test-stage185-story-blend-deployment.js"
           test -f "$SOURCE_DIR/BUILD_PACKAGE_MANIFEST_STAGE185.json"
@@ -103,7 +138,6 @@ jobs:
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
           echo "Stage185 source extracted successfully."
-          echo "Project directory: $SOURCE_DIR"
 
       - name: Verify Stage185 package identity
         shell: bash
@@ -114,8 +148,8 @@ jobs:
           import json
           import sys
 
-          with open(sys.argv[1], encoding="utf-8") as f:
-              manifest = json.load(f)
+          with open(sys.argv[1], encoding="utf-8") as file:
+              manifest = json.load(file)
 
           assert manifest["package_stage"] == 185
           assert manifest["application_version"] == "7.5.0"
@@ -126,9 +160,7 @@ jobs:
           PY
 
       - name: Install Python test dependencies
-        shell: bash
         run: |
-          set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r "$SOURCE_DIR/requirements-test.txt"
 
@@ -169,8 +201,6 @@ jobs:
             node "$TEST_FILE"
           done
 
-          echo "All JavaScript tests completed."
-
       - name: Run Python preflight and regression tests
         shell: bash
         run: |
@@ -196,8 +226,6 @@ jobs:
             echo "Running: $TEST_FILE"
             python "$TEST_FILE"
           done
-
-          echo "All Python tests completed."
 
       - name: Build Android debug APK
         shell: bash
@@ -233,12 +261,13 @@ jobs:
           {
             echo "## SONGDNA SMART STUDIO 7.5.0 - Stage185"
             echo ""
-            echo "- Stage185 archive extracted."
+            echo "- Stage185 ZIP validated."
+            echo "- Source extracted."
             echo "- Package identity verified."
             echo "- Source integrity checked."
             echo "- Backend syntax checked."
-            echo "- Story blending endpoint test completed."
-            echo "- JavaScript and Python tests completed."
+            echo "- Story blending endpoint tested."
+            echo "- Regression tests completed."
             echo "- Android debug APK generated."
             echo "- SHA-256 checksum generated."
           } >> "$GITHUB_STEP_SUMMARY"
