@@ -1,22 +1,22 @@
-name: SONGDNA SMART STUDIO 7.5.0 - Stage186 Android Build
+name: SONGDNA SMART STUDIO 7.5.0 - Stage187 Android Build
 
 on:
   workflow_dispatch:
   push:
     paths:
-      - 'SONGDNA_SMART_STUDIO_7_5_0_STAGE186_KAYNAK_PAKETI.zip'
+      - 'SONGDNA_SMART_STUDIO_7_5_0_STAGE187_KAYNAK_PAKETI.zip'
       - '.github/workflows/build.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage186-android-${{ github.ref }}
+  group: songdna-stage187-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify-and-build:
-    name: Verify Stage186 source and build Android APK
+    name: Verify Stage187 source and build Android APK
     runs-on: ubuntu-24.04
     timeout-minutes: 90
 
@@ -45,66 +45,67 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Find and validate exact Stage186 ZIP
+      - name: Find and validate exact Stage187 ZIP
         shell: bash
         run: |
           set -euo pipefail
 
-          ZIP_NAME='SONGDNA_SMART_STUDIO_7_5_0_STAGE186_KAYNAK_PAKETI.zip'
+          ZIP_NAME='SONGDNA_SMART_STUDIO_7_5_0_STAGE187_KAYNAK_PAKETI.zip'
           ZIP_FILE="$GITHUB_WORKSPACE/$ZIP_NAME"
 
           if [[ ! -f "$ZIP_FILE" ]]; then
-            echo "::error::Stage186 ZIP not found. Upload exactly '$ZIP_NAME' to the repository root."
-            echo 'Repository-root ZIP files:'
-            find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -iname '*.zip' -printf '%f\n' || true
+            echo "::error::Stage187 ZIP not found. Upload the exact original file '$ZIP_NAME' to the repository root."
+            echo "ZIP files currently in repository root:"
+            find "$GITHUB_WORKSPACE" -maxdepth 1 -type f -iname '*.zip' -printf '%f (%s bytes)\n' || true
             exit 1
           fi
 
           if [[ ! -s "$ZIP_FILE" ]]; then
-            echo "::error::Stage186 ZIP is empty."
+            echo "::error::Stage187 ZIP is empty. Upload the complete original archive again."
             exit 1
           fi
 
           python - "$ZIP_FILE" <<'PY'
-          import sys
-          import zipfile
+          import sys, zipfile
           from pathlib import PurePosixPath
 
-          p = sys.argv[1]
-          required = 'SONGDNA_SMART_STUDIO_7_5_0_STAGE186/BUILD_PACKAGE_MANIFEST_STAGE186.json'
+          archive = sys.argv[1]
+          required = 'SONGDNA_SMART_STUDIO_7_5_0_STAGE187/BUILD_PACKAGE_MANIFEST_STAGE187.json'
 
           try:
-              with zipfile.ZipFile(p) as z:
+              with zipfile.ZipFile(archive) as z:
                   bad = z.testzip()
                   if bad:
-                      raise SystemExit(f'INVALID: CRC/integrity error in {bad}')
+                      raise SystemExit(f'ZIP CRC error: {bad}')
 
                   names = set(z.namelist())
 
                   if required not in names:
-                      raise SystemExit(f'INVALID: required package file missing: {required}')
+                      raise SystemExit(
+                          f'Wrong archive or missing Stage187 manifest: {required}'
+                      )
 
                   if any(
                       PurePosixPath(n).is_absolute()
                       or '..' in PurePosixPath(n).parts
                       for n in names
                   ):
-                      raise SystemExit('INVALID: unsafe archive path detected')
+                      raise SystemExit('Unsafe path found in ZIP archive')
 
-          except (zipfile.BadZipFile, OSError) as e:
-              raise SystemExit(f'INVALID: file is not a complete ZIP archive: {e}')
+          except (zipfile.BadZipFile, OSError) as exc:
+              raise SystemExit(f'Invalid ZIP archive: {exc}')
 
-          print('Stage186 ZIP integrity and required package structure: OK')
+          print('Stage187 ZIP integrity and package identity: PASS')
           PY
 
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-      - name: Extract Stage186 source
+      - name: Extract Stage187 source
         shell: bash
         run: |
           set -euo pipefail
 
-          SOURCE_ROOT="$GITHUB_WORKSPACE/stage186-source"
+          SOURCE_ROOT="$GITHUB_WORKSPACE/stage187-source"
           mkdir -p "$SOURCE_ROOT"
 
           python - "$ZIP_FILE" "$SOURCE_ROOT" <<'PY'
@@ -115,31 +116,49 @@ jobs:
               z.extractall(sys.argv[2])
           PY
 
-          SOURCE_DIR="$SOURCE_ROOT/SONGDNA_SMART_STUDIO_7_5_0_STAGE186"
+          SOURCE_DIR="$SOURCE_ROOT/SONGDNA_SMART_STUDIO_7_5_0_STAGE187"
 
-          test -d "$SOURCE_DIR"
-          test -f "$SOURCE_DIR/BUILD_PACKAGE_MANIFEST_STAGE186.json"
+          test -f "$SOURCE_DIR/BUILD_PACKAGE_MANIFEST_STAGE187.json"
           test -f "$SOURCE_DIR/requirements-test.txt"
-          test -f "$SOURCE_DIR/android-wrapper/settings.gradle" || test -f "$SOURCE_DIR/android-wrapper/settings.gradle.kts"
+          test -f "$SOURCE_DIR/android-wrapper/settings.gradle.kts"
 
           echo "SOURCE_DIR=$SOURCE_DIR" >> "$GITHUB_ENV"
 
-      - name: Verify Stage186 package identity
+      - name: Verify Stage187 package identity and verifier copies
         shell: bash
         run: |
           set -euo pipefail
 
-          python - "$SOURCE_DIR/BUILD_PACKAGE_MANIFEST_STAGE186.json" <<'PY'
+          python - "$SOURCE_DIR" <<'PY'
           import json
+          import pathlib
           import sys
 
-          with open(sys.argv[1], encoding='utf-8') as f:
-              m = json.load(f)
+          root = pathlib.Path(sys.argv[1])
 
-          assert m.get('package_stage') == 186, 'Manifest package_stage must be 186'
-          assert m.get('application_version') == '7.5.0', 'Unexpected app version'
+          manifest = json.loads(
+              (root / 'BUILD_PACKAGE_MANIFEST_STAGE187.json')
+              .read_text(encoding='utf-8')
+          )
 
-          print('Stage186 manifest identity: OK')
+          assert manifest.get('package_stage') == 187, \
+              'Manifest must identify Stage187'
+
+          assert manifest.get('application_version') == '7.5.0', \
+              'Unexpected application version'
+
+          canonical = (root / 'scripts/verify-source.py').read_bytes()
+
+          copies = [
+              root / 'www/scripts/verify-source.py',
+              root / 'android-wrapper/app/src/main/assets/scripts/verify-source.py'
+          ]
+
+          for path in copies:
+              assert path.is_file() and path.read_bytes() == canonical, \
+                  f'Verifier copy mismatch: {path}'
+
+          print('Stage187 identity and all verifier copies: PASS')
           PY
 
       - name: Install Python test dependencies
@@ -158,7 +177,7 @@ jobs:
       - name: Verify backend JavaScript syntax
         run: npm --prefix "$SOURCE_DIR/backend" run check
 
-      - name: Verify Stage186 story blending endpoint
+      - name: Verify Stage187 story blending endpoint
         run: node "$SOURCE_DIR/scripts/test-stage185-story-blend-deployment.js"
 
       - name: Run all JavaScript regression tests
@@ -174,7 +193,7 @@ jobs:
           echo "JavaScript regression files found: ${#TESTS[@]}"
 
           if [[ ${#TESTS[@]} -eq 0 ]]; then
-            echo '::error::No JavaScript regression tests found.'
+            echo "::error::No JavaScript regression tests found."
             exit 1
           fi
 
@@ -219,26 +238,28 @@ jobs:
 
           test -s "$APK"
 
-          mkdir -p "$GITHUB_WORKSPACE/stage186-output"
+          mkdir -p "$GITHUB_WORKSPACE/stage187-output"
 
-          cp "$APK" "$GITHUB_WORKSPACE/stage186-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE186_DEBUG.apk"
+          cp "$APK" \
+            "$GITHUB_WORKSPACE/stage187-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE187_DEBUG.apk"
 
-          sha256sum "$GITHUB_WORKSPACE/stage186-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE186_DEBUG.apk" \
-            > "$GITHUB_WORKSPACE/stage186-output/SHA256SUMS.txt"
+          sha256sum \
+            "$GITHUB_WORKSPACE/stage187-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE187_DEBUG.apk" \
+            > "$GITHUB_WORKSPACE/stage187-output/SHA256SUMS.txt"
 
           {
-            echo '## SONGDNA SMART STUDIO 7.5.0 — Stage186'
+            echo '## SONGDNA SMART STUDIO 7.5.0 — Stage187'
             echo ''
-            echo '- Exact source archive validated before extraction.'
-            echo '- All discovered JavaScript and Python regression tests completed.'
-            echo '- Android debug APK generated.'
-            echo '- SHA-256 checksum generated.'
+            echo '- Stage187 source ZIP validated before extraction.'
+            echo '- Source and WebView/Android verifier copies synchronized.'
+            echo '- JavaScript and Python regression suites completed.'
+            echo '- Android debug APK and SHA-256 generated.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Stage186 APK and checksum
+      - name: Upload Stage187 APK and checksum
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE186-ANDROID
-          path: stage186-output/*
+          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE187-ANDROID
+          path: stage187-output/*
           if-no-files-found: error
           retention-days: 30
