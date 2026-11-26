@@ -39,10 +39,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
-          cache-dependency-path: "**/package-lock.json"
 
-      - name: Set up Python
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -53,13 +51,13 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Find and validate exact Stage187 ZIP
+      - name: Find and validate Stage187 ZIP
         id: package
         shell: bash
         run: |
           set -Eeuo pipefail
 
-          echo "Stage187 kaynak paketi aranıyor..."
+          echo "Stage187 ZIP aranıyor..."
 
           mapfile -t ZIP_FILES < <(
             find . -type f \
@@ -69,21 +67,19 @@ jobs:
           )
 
           if [ "${#ZIP_FILES[@]}" -eq 0 ]; then
-            echo "::error::Stage187 ZIP bulunamadı. GitHub'a yüklenen dosyanın adını kontrol edin."
+            echo "::error::Stage187 ZIP bulunamadı."
             exit 1
           fi
 
           if [ "${#ZIP_FILES[@]}" -gt 1 ]; then
-            echo "::error::Birden fazla Stage187 ZIP bulundu. Yanlış paketin seçilmesini önlemek için işlem durduruldu."
+            echo "::error::Birden fazla Stage187 ZIP bulundu. Tek bir kaynak paketi bırakın."
             printf '%s\n' "${ZIP_FILES[@]}"
             exit 1
           fi
 
           ZIP_PATH="${ZIP_FILES[0]}"
 
-          echo "Bulunan dosya: $ZIP_PATH"
-          echo "Dosya boyutu:"
-          stat -c '%s bytes' "$ZIP_PATH"
+          echo "Bulundu: $ZIP_PATH"
 
           if [ ! -s "$ZIP_PATH" ]; then
             echo "::error::ZIP dosyası boş."
@@ -91,11 +87,9 @@ jobs:
           fi
 
           if ! unzip -tq "$ZIP_PATH"; then
-            echo "::error::Stage187 ZIP bozuk veya eksik yüklenmiş."
+            echo "::error::ZIP dosyası bozuk veya eksik."
             exit 1
           fi
-
-          echo "ZIP sağlamlık kontrolü başarılı."
 
           echo "zip_path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
 
@@ -111,13 +105,12 @@ jobs:
           unzip -q "${{ steps.package.outputs.zip_path }}" -d "$EXTRACT_DIR"
 
           if [ -z "$(find "$EXTRACT_DIR" -type f -print -quit)" ]; then
-            echo "::error::ZIP içerisinden kaynak dosyası çıkarılamadı."
+            echo "::error::ZIP içerisinde kaynak dosyası bulunamadı."
             exit 1
           fi
 
           echo "extract_dir=$EXTRACT_DIR" >> "$GITHUB_OUTPUT"
-
-          echo "Stage187 kaynak dosyaları çıkarıldı."
+          echo "Kaynak paketi çıkarıldı."
 
       - name: Locate Android Gradle project
         id: project
@@ -127,26 +120,29 @@ jobs:
 
           EXTRACT_DIR="${{ steps.extract.outputs.extract_dir }}"
 
-          GRADLEW="$(find "$EXTRACT_DIR" -type f -name gradlew -print -quit)"
+          mapfile -t GRADLE_FILES < <(
+            find "$EXTRACT_DIR" -type f -name gradlew \
+              -not -path '*/node_modules/*' \
+              -print
+          )
 
-          if [ -z "$GRADLEW" ]; then
-            echo "::error::Stage187 ZIP içerisinde Gradle wrapper bulunamadı."
+          if [ "${#GRADLE_FILES[@]}" -ne 1 ]; then
+            echo "::error::Tek bir Android Gradle projesi bekleniyordu. Bulunan wrapper sayısı: ${#GRADLE_FILES[@]}"
+            printf '%s\n' "${GRADLE_FILES[@]}"
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$GRADLEW")"
+          PROJECT_DIR="$(dirname "${GRADLE_FILES[0]}")"
 
           if [ ! -f "$PROJECT_DIR/settings.gradle" ] && \
              [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "::error::Gradle proje ayar dosyası bulunamadı."
+            echo "::error::Gradle settings dosyası bulunamadı."
             exit 1
           fi
 
-          chmod +x "$GRADLEW"
+          chmod +x "$PROJECT_DIR/gradlew"
 
           echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-          echo "Android proje dizini doğrulandı: $PROJECT_DIR"
 
       - name: Verify Stage187 package identity
         shell: bash
@@ -164,7 +160,7 @@ jobs:
 
           echo "Stage187 paket kimliği kontrol edildi."
 
-      - name: Verify story blending backend endpoint
+      - name: Verify story blending endpoint
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -178,7 +174,9 @@ jobs:
           elif [ -f "$EXTRACT_DIR/server.js" ]; then
             SERVER_FILE="$EXTRACT_DIR/server.js"
           else
-            SERVER_FILE="$(find "$EXTRACT_DIR" -type f -name server.js -print -quit)"
+            SERVER_FILE="$(find "$EXTRACT_DIR" -type f \
+              -name server.js -not -path '*/node_modules/*' \
+              -print -quit)"
           fi
 
           if [ -z "$SERVER_FILE" ]; then
@@ -187,21 +185,19 @@ jobs:
           fi
 
           if ! grep -q 'story-blend' "$SERVER_FILE"; then
-            echo "::error::Story blending endpoint kaynakta bulunamadı."
+            echo "::error::Story blending endpoint bulunamadı."
             exit 1
           fi
 
-          echo "Story blending endpoint kaynakta mevcut."
-
           if [ -f "$EXTRACT_DIR/backend/server.js" ] && \
              [ -f "$EXTRACT_DIR/server.js" ]; then
-            if ! cmp -s \
-              "$EXTRACT_DIR/backend/server.js" \
-              "$EXTRACT_DIR/server.js"; then
+            if ! cmp -s "$EXTRACT_DIR/backend/server.js" "$EXTRACT_DIR/server.js"; then
               echo "::error::Root ve backend server.js dosyaları farklı."
               exit 1
             fi
           fi
+
+          echo "Story blending endpoint kontrolü başarılı."
 
       - name: Verify backend JavaScript syntax
         shell: bash
@@ -211,7 +207,7 @@ jobs:
           EXTRACT_DIR="${{ steps.extract.outputs.extract_dir }}"
 
           while IFS= read -r FILE; do
-            echo "Kontrol ediliyor: $FILE"
+            echo "Kontrol: $FILE"
             node --check "$FILE"
           done < <(
             find "$EXTRACT_DIR" -type f \
@@ -221,17 +217,16 @@ jobs:
 
           echo "JavaScript syntax kontrolü tamamlandı."
 
-      - name: Run available JavaScript regression tests
+      - name: Run available Stage187 regression tests
         shell: bash
         run: |
           set -Eeuo pipefail
 
           EXTRACT_DIR="${{ steps.extract.outputs.extract_dir }}"
-
           TEST_COUNT=0
 
           while IFS= read -r TEST_FILE; do
-            echo "Test çalıştırılıyor: $TEST_FILE"
+            echo "Test: $TEST_FILE"
             node "$TEST_FILE"
             TEST_COUNT=$((TEST_COUNT + 1))
           done < <(
@@ -253,7 +248,7 @@ jobs:
 
           ./gradlew --no-daemon --stacktrace assembleDebug
 
-      - name: Verify APK output
+      - name: Verify APK and generate SHA-256
         id: apk
         shell: bash
         run: |
@@ -269,15 +264,14 @@ jobs:
           )
 
           if [ "${#APK_FILES[@]}" -eq 0 ]; then
-            echo "::error::Gradle tamamlandı ancak APK dosyası bulunamadı."
+            echo "::error::APK oluşturulamadı."
             exit 1
           fi
 
           mkdir -p "$RUNNER_TEMP/songdna-artifacts"
 
-          APK_PATH="${APK_FILES[0]}"
-
-          cp "$APK_PATH" "$RUNNER_TEMP/songdna-artifacts/SONGDNA_STAGE187_DEBUG.apk"
+          cp "${APK_FILES[0]}" \
+            "$RUNNER_TEMP/songdna-artifacts/SONGDNA_STAGE187_DEBUG.apk"
 
           cd "$RUNNER_TEMP/songdna-artifacts"
 
@@ -285,10 +279,10 @@ jobs:
 
           echo "APK_PATH=$RUNNER_TEMP/songdna-artifacts" >> "$GITHUB_ENV"
 
-          echo "APK başarıyla doğrulandı."
+          echo "APK doğrulandı."
           cat SHA256SUMS.txt
 
-      - name: Upload Stage187 APK and checksum
+      - name: Upload Stage187 APK
         uses: actions/upload-artifact@v4
         with:
           name: SONGDNA_STAGE187_ANDROID_APK
