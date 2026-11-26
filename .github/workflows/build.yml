@@ -72,7 +72,7 @@ jobs:
 
           if len(candidates) != 1:
               raise SystemExit(
-                  "::error::Depoda tam olarak bir Stage190 kaynak ZIP bulunmalı. "
+                  "::error::Depoda tam olarak bir Stage190 ZIP bulunmalı: "
                   + str([p.name for p in candidates])
               )
 
@@ -87,12 +87,10 @@ jobs:
               names = z.namelist()
 
               for name in names:
-                  p = pathlib.PurePosixPath(name)
+                  path = pathlib.PurePosixPath(name)
 
-                  if p.is_absolute() or ".." in p.parts:
-                      raise SystemExit(
-                          "Güvensiz ZIP yolu: " + name
-                      )
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit("Güvensiz ZIP yolu: " + name)
 
               manifests = [
                   n for n in names
@@ -105,12 +103,12 @@ jobs:
                       "Stage190 manifest tam olarak bir adet olmalı"
                   )
 
-              data = json.loads(z.read(manifests[0]))
+              manifest_data = json.loads(z.read(manifests[0]))
 
-              if data.get("package_stage") != 190:
+              if manifest_data.get("package_stage") != 190:
                   raise SystemExit("Paket Stage190 değil")
 
-              if data.get("application_version") != "7.5.0":
+              if manifest_data.get("application_version") != "7.5.0":
                   raise SystemExit("Uygulama sürümü 7.5.0 değil")
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
@@ -146,11 +144,11 @@ jobs:
               z.extractall(dest)
 
           manifest = dest / os.environ["MANIFEST_PATH"]
-          root = manifest.parent
 
           if not manifest.is_file():
-              raise SystemExit("Stage190 manifest çıkarılamadı")
+              raise SystemExit("Stage190 manifest bulunamadı")
 
+          root = manifest.parent
           data = json.loads(manifest.read_text(encoding="utf-8"))
 
           if data.get("package_stage") != 190:
@@ -164,13 +162,14 @@ jobs:
               "backend/server.js",
               "server.js",
               "android-wrapper/settings.gradle.kts",
-              "android-wrapper/app",
+              "android-wrapper/app/build.gradle.kts",
+              "BUILD_PACKAGE_MANIFEST_STAGE190.json"
           ]
 
           for item in required:
               if not (root / item).exists():
                   raise SystemExit(
-                      "Gerekli Stage190 dosyası bulunamadı: " + item
+                      "Gerekli dosya bulunamadı: " + item
                   )
 
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
@@ -250,10 +249,10 @@ jobs:
           set -euo pipefail
           cd "$SOURCE_DIR"
 
-          if [ ! -f requirements-test.txt ]; then
+          test -f requirements-test.txt || {
             echo "::error::requirements-test.txt bulunamadı"
             exit 1
-          fi
+          }
 
           python -m pip install --upgrade pip
           python -m pip install -r requirements-test.txt
@@ -279,7 +278,7 @@ jobs:
 
           for test_file in "${TESTS[@]}"; do
             if [ ! -f "$test_file" ]; then
-              echo "::error::Python test bulunamadı: $test_file"
+              echo "::error::Test dosyası bulunamadı: $test_file"
               exit 1
             fi
 
@@ -338,51 +337,59 @@ jobs:
           print("Android project:", project)
           PY
 
-      - name: Set up Gradle 8.9
+      - name: Install Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
 
-      - name: Install Android SDK components
+      - name: Install Android 35 SDK components
         shell: bash
         run: |
           set -euo pipefail
 
           SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 
-          if [ -z "$SDK_ROOT" ] || [ ! -d "$SDK_ROOT" ]; then
-            echo "::error::Android SDK bulunamadı"
+          if [ -z "$SDK_ROOT" ]; then
+            echo "::error::Android SDK yolu bulunamadı"
             exit 1
           fi
 
-          SDKMANAGER="$(
-            find "$SDK_ROOT/cmdline-tools" \
-              -type f -name sdkmanager 2>/dev/null \
-              | sort | tail -n 1
-          )"
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "::error::sdkmanager bulunamadı"
+          if ! command -v sdkmanager >/dev/null 2>&1; then
+            echo "::error::sdkmanager PATH içinde bulunamadı"
             exit 1
           fi
 
           echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
           echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
 
-          yes | "$SDKMANAGER" \
-            --sdk_root="$SDK_ROOT" \
-            --licenses >/dev/null || true
-
-          "$SDKMANAGER" \
+          sdkmanager \
             --sdk_root="$SDK_ROOT" \
             --install \
-            'platform-tools' \
             'platforms;android-35' \
-            'build-tools;35.0.0'
+            'build-tools;35.0.0' \
+            'platform-tools'
+
+          echo "Android SDK 35 bileşenleri kuruldu"
+
+      - name: Verify Android SDK installation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+
+          test -d "$SDK_ROOT/platforms/android-35"
+          test -d "$SDK_ROOT/build-tools/35.0.0"
+          test -x "$SDK_ROOT/platform-tools/adb"
+
+          sdkmanager --version
+
+          echo "Android SDK doğrulaması başarılı"
 
       - name: Build Android debug APK
         env:
@@ -428,6 +435,7 @@ jobs:
             echo "- Backend and Render contract verified."
             echo "- JavaScript regression suite passed."
             echo "- Python browser regression suite passed."
+            echo "- Android SDK 35 verified."
             echo "- Android debug APK built."
             echo "- SHA-256 checksum generated."
           } >> "$GITHUB_STEP_SUMMARY"
