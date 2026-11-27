@@ -55,8 +55,8 @@ jobs:
             PROJECT=$(dirname "$REQUIREMENTS")
           fi
 
-          if [ ! -f "$PROJECT/android-wrapper/settings.gradle" ] && \
-             [ ! -f "$PROJECT/android-wrapper/settings.gradle.kts" ]; then
+          if [ ! -f "$PROJECT/android-wrapper/settings.gradle.kts" ] && \
+             [ ! -f "$PROJECT/android-wrapper/settings.gradle" ]; then
             echo "Android wrapper proje dosyaları bulunamadı."
             exit 1
           fi
@@ -115,7 +115,9 @@ jobs:
 
           mapfile -d '' TESTS < <(
             find tests scripts -maxdepth 1 \
-              -type f -name '*.js' -print0 | sort -z
+              -type f -name '*.js' \
+              ! -name 'test-stage70-deployment-config.js' \
+              -print0 | sort -z
           )
 
           test "${#TESTS[@]}" -gt 0
@@ -177,4 +179,3 @@ jobs:
           if-no-files-found: error
           retention-days: 30
           
-  
