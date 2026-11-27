@@ -1,5 +1,5 @@
 
-name: SONGDNA SMART STUDIO 7.5.0 - Stage197 Android Build
+name: SONGDNA SMART STUDIO 7.6.0 - Stage197 Android Build
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   verify-and-build:
-    name: Verify and Build Stage197 APK
+    name: Verify and Build 7.6.0 APK
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
@@ -138,7 +138,7 @@ jobs:
             python "$test_file"
           done
 
-      - name: Build Stage197 Android APK
+      - name: Build 7.6.0 Android APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -154,7 +154,7 @@ jobs:
             if [ "$ATTEMPT" -lt 3 ]; then sleep 15; fi
           done
           if [ "$BUILD_SUCCESS" != "true" ]; then
-            echo "Stage197 APK build failed after 3 attempts."
+            echo "7.6.0 APK build failed after 3 attempts."
             exit 1
           fi
 
@@ -166,7 +166,7 @@ jobs:
           APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
           mkdir -p stage197-output
-          cp "$APK" stage197-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE197_DEBUG.apk
+          cp "$APK" stage197-output/SONGDNA_SMART_STUDIO_7_6_0_STAGE197_DEBUG.apk
           cd stage197-output
           sha256sum *.apk > SHA256SUMS.txt
           ls -lh *.apk
@@ -175,7 +175,7 @@ jobs:
       - name: Upload Stage197 Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE197-ANDROID
+          name: SONGDNA-SMART-STUDIO-7.6.0-STAGE197-ANDROID
           path: ${{ env.PROJECT_DIR }}/stage197-output/*
           if-no-files-found: error
           retention-days: 30
