@@ -1,5 +1,5 @@
 
-name: SONGDNA SMART STUDIO 7.5.0 - Stage196 Android Build
+name: SONGDNA SMART STUDIO 7.5.0 - Stage197 Android Build
 
 on:
   workflow_dispatch:
@@ -8,20 +8,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage196-${{ github.ref }}
+  group: songdna-stage197-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   verify-and-build:
-    name: Verify and Build Stage196 APK
+    name: Verify and Build Stage197 APK
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     steps:
-      - name: Checkout Stage196 source
+      - name: Checkout Stage197 source
         uses: actions/checkout@v4
 
-      - name: Locate Stage196 project
+      - name: Locate Stage197 project
         shell: bash
         run: |
           set -euo pipefail
@@ -37,14 +37,14 @@ jobs:
               PROJECT="$(dirname "$(realpath "$REQUIREMENTS")")"
             else
               ZIP_FILE=$(find . -maxdepth 4 -type f \
-                -iname '*STAGE196*.zip' -print -quit)
+                -iname '*STAGE197*.zip' -print -quit)
               if [ -z "$ZIP_FILE" ]; then
-                echo "Stage196 source folder or ZIP not found."
+                echo "Stage197 source folder or ZIP not found."
                 exit 1
               fi
-              mkdir -p "$RUNNER_TEMP/stage196-source"
-              unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/stage196-source"
-              REQUIREMENTS=$(find "$RUNNER_TEMP/stage196-source" \
+              mkdir -p "$RUNNER_TEMP/stage197-source"
+              unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/stage197-source"
+              REQUIREMENTS=$(find "$RUNNER_TEMP/stage197-source" \
                 -type f -name requirements-test.txt -print -quit)
               if [ -z "$REQUIREMENTS" ]; then
                 echo "requirements-test.txt not found in ZIP."
@@ -58,7 +58,7 @@ jobs:
           test -f "$PROJECT/android-wrapper/settings.gradle.kts"
           test -f "$PROJECT/android-wrapper/app/build.gradle.kts"
           echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
-          echo "Stage196 project: $PROJECT"
+          echo "Stage197 project: $PROJECT"
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -102,7 +102,7 @@ jobs:
           python -m pip install -r requirements-test.txt
           python -m playwright install --with-deps chromium
 
-      - name: Verify Stage196 source and backend
+      - name: Verify Stage197 source and backend
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           python scripts/verify-source.py
@@ -138,7 +138,7 @@ jobs:
             python "$test_file"
           done
 
-      - name: Build Stage196 Android APK
+      - name: Build Stage197 Android APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -154,7 +154,7 @@ jobs:
             if [ "$ATTEMPT" -lt 3 ]; then sleep 15; fi
           done
           if [ "$BUILD_SUCCESS" != "true" ]; then
-            echo "Stage196 APK build failed after 3 attempts."
+            echo "Stage197 APK build failed after 3 attempts."
             exit 1
           fi
 
@@ -165,18 +165,18 @@ jobs:
           set -euo pipefail
           APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
-          mkdir -p stage196-output
-          cp "$APK" stage196-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE196_DEBUG.apk
-          cd stage196-output
+          mkdir -p stage197-output
+          cp "$APK" stage197-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE197_DEBUG.apk
+          cd stage197-output
           sha256sum *.apk > SHA256SUMS.txt
           ls -lh *.apk
           cat SHA256SUMS.txt
 
-      - name: Upload Stage196 Android APK
+      - name: Upload Stage197 Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE196-ANDROID
-          path: ${{ env.PROJECT_DIR }}/stage196-output/*
+          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE197-ANDROID
+          path: ${{ env.PROJECT_DIR }}/stage197-output/*
           if-no-files-found: error
           retention-days: 30
           
