@@ -1,5 +1,5 @@
 
-name: SONGDNA SMART STUDIO 7.5.0 - Stage195 Android Build
+name: SONGDNA SMART STUDIO 7.5.0 - Stage196 Android Build
 
 on:
   workflow_dispatch:
@@ -8,79 +8,57 @@ permissions:
   contents: read
 
 concurrency:
-  group: songdna-stage195-${{ github.ref }}
+  group: songdna-stage196-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   verify-and-build:
-    name: Verify and Build Stage195 APK
+    name: Verify and Build Stage196 APK
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     steps:
-      - name: Checkout Stage195 source
+      - name: Checkout Stage196 source
         uses: actions/checkout@v4
 
-      - name: Locate Stage195 project
+      - name: Locate Stage196 project
         shell: bash
         run: |
           set -euo pipefail
-
           PROJECT=""
 
           if [ -f "requirements-test.txt" ] && [ -d "android-wrapper" ]; then
             PROJECT="$PWD"
           else
-            REQUIREMENTS=$(find . -type f \
-              -name requirements-test.txt \
-              -not -path '*/node_modules/*' \
-              -print -quit)
+            REQUIREMENTS=$(find . -type f -name requirements-test.txt \
+              -not -path '*/node_modules/*' -print -quit)
 
             if [ -n "$REQUIREMENTS" ]; then
               PROJECT="$(dirname "$(realpath "$REQUIREMENTS")")"
             else
               ZIP_FILE=$(find . -maxdepth 4 -type f \
-                -iname '*STAGE195*.zip' -print -quit)
-
+                -iname '*STAGE196*.zip' -print -quit)
               if [ -z "$ZIP_FILE" ]; then
-                echo "Stage195 kaynak ZIP dosyası bulunamadı."
+                echo "Stage196 source folder or ZIP not found."
                 exit 1
               fi
-
-              mkdir -p "$RUNNER_TEMP/stage195-source"
-              unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/stage195-source"
-
-              REQUIREMENTS=$(find "$RUNNER_TEMP/stage195-source" \
+              mkdir -p "$RUNNER_TEMP/stage196-source"
+              unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/stage196-source"
+              REQUIREMENTS=$(find "$RUNNER_TEMP/stage196-source" \
                 -type f -name requirements-test.txt -print -quit)
-
               if [ -z "$REQUIREMENTS" ]; then
-                echo "ZIP içinde requirements-test.txt bulunamadı."
+                echo "requirements-test.txt not found in ZIP."
                 exit 1
               fi
-
               PROJECT="$(dirname "$REQUIREMENTS")"
             fi
           fi
 
-          if [ ! -d "$PROJECT/android-wrapper" ]; then
-            echo "android-wrapper klasörü bulunamadı."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT/android-wrapper/settings.gradle.kts" ]; then
-            echo "Gradle settings dosyası bulunamadı."
-            exit 1
-          fi
-
-          if [ ! -f "$PROJECT/android-wrapper/app/build.gradle.kts" ]; then
-            echo "Android uygulama yapılandırması bulunamadı."
-            exit 1
-          fi
-
+          test -d "$PROJECT/android-wrapper"
+          test -f "$PROJECT/android-wrapper/settings.gradle.kts"
+          test -f "$PROJECT/android-wrapper/app/build.gradle.kts"
           echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
-
-          echo "Stage195 proje dizini:"
-          echo "$PROJECT"
+          echo "Stage196 project: $PROJECT"
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
@@ -105,12 +83,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           sdkmanager --install \
             "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
-
           yes | sdkmanager --licenses || true
 
       - name: Setup Gradle 8.9
@@ -121,25 +97,15 @@ jobs:
 
       - name: Install Python test dependencies
         working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
         run: |
-          set -euo pipefail
-
           python -m pip install --upgrade pip
-
-          python -m pip install \
-            -r requirements-test.txt
-
+          python -m pip install -r requirements-test.txt
           python -m playwright install --with-deps chromium
 
-      - name: Verify Stage195 source and backend
+      - name: Verify Stage196 source and backend
         working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
         run: |
-          set -euo pipefail
-
           python scripts/verify-source.py
-
           npm --prefix backend run check
 
       - name: Run JavaScript regression tests
@@ -147,119 +113,70 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
           mapfile -d '' TESTS < <(
-            find tests scripts \
-              -maxdepth 1 \
-              -type f \
-              -name '*.js' \
+            find tests scripts -maxdepth 1 -type f -name '*.js' \
               ! -name 'test-stage70-deployment-config.js' \
               -print0 | sort -z
           )
-
-          if [ "${#TESTS[@]}" -eq 0 ]; then
-            echo "JavaScript testleri bulunamadı."
-            exit 1
-          fi
-
+          test "${#TESTS[@]}" -gt 0
           for test_file in "${TESTS[@]}"; do
             echo "Running: $test_file"
             node "$test_file"
           done
-
-          echo "JavaScript testleri tamamlandı."
 
       - name: Run Python and browser regression tests
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-
           python scripts/ci-preflight.py
-
           shopt -s nullglob
           TESTS=(scripts/test-*.py)
-
-          if [ "${#TESTS[@]}" -eq 0 ]; then
-            echo "Python testleri bulunamadı."
-            exit 1
-          fi
-
+          test "${#TESTS[@]}" -gt 0
           for test_file in "${TESTS[@]}"; do
             echo "Running: $test_file"
             python "$test_file"
           done
 
-          echo "Python ve tarayıcı testleri tamamlandı."
-
-      - name: Build Stage195 Android APK
+      - name: Build Stage196 Android APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-
           BUILD_SUCCESS=false
-
           for ATTEMPT in 1 2 3; do
-            echo "APK derleme denemesi: $ATTEMPT / 3"
-
-            if gradle \
-              -p android-wrapper \
-              :app:assembleDebug \
-              --no-daemon \
-              --refresh-dependencies \
-              --stacktrace; then
-
+            echo "Gradle build attempt: $ATTEMPT / 3"
+            if gradle -p android-wrapper :app:assembleDebug \
+              --no-daemon --refresh-dependencies --stacktrace; then
               BUILD_SUCCESS=true
               break
             fi
-
-            if [ "$ATTEMPT" -lt 3 ]; then
-              echo "Derleme başarısız. Tekrar denenecek."
-              sleep 15
-            fi
+            if [ "$ATTEMPT" -lt 3 ]; then sleep 15; fi
           done
-
           if [ "$BUILD_SUCCESS" != "true" ]; then
-            echo "Stage195 APK derlemesi başarısız."
+            echo "Stage196 APK build failed after 3 attempts."
             exit 1
           fi
-
-          echo "APK derlemesi başarılı."
 
       - name: Verify APK and calculate SHA256
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-
           APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
-
-          if [ ! -s "$APK" ]; then
-            echo "APK bulunamadı veya boş."
-            exit 1
-          fi
-
-          mkdir -p stage195-output
-
-          cp "$APK" \
-            stage195-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE195_DEBUG.apk
-
-          cd stage195-output
-
+          test -s "$APK"
+          mkdir -p stage196-output
+          cp "$APK" stage196-output/SONGDNA_SMART_STUDIO_7_5_0_STAGE196_DEBUG.apk
+          cd stage196-output
           sha256sum *.apk > SHA256SUMS.txt
-
-          echo "Oluşturulan APK:"
           ls -lh *.apk
-
-          echo "SHA256:"
           cat SHA256SUMS.txt
 
-      - name: Upload Stage195 Android APK
+      - name: Upload Stage196 Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE195-ANDROID
-          path: ${{ env.PROJECT_DIR }}/stage195-output/*
+          name: SONGDNA-SMART-STUDIO-7.5.0-STAGE196-ANDROID
+          path: ${{ env.PROJECT_DIR }}/stage196-output/*
           if-no-files-found: error
           retention-days: 30
           
