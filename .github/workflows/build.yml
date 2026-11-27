@@ -1,5 +1,5 @@
 
-name: SONGDNA SMART STUDIO 7.5.0 - Stage195 Full Android Build
+name: SONGDNA SMART STUDIO 7.5.0 - Stage195 Android Build
 
 on:
   workflow_dispatch:
@@ -28,7 +28,7 @@ jobs:
 
           PROJECT=""
 
-          if [ -f "requirements-test.txt" ]; then
+          if [ -f "requirements-test.txt" ] && [ -d "android-wrapper" ]; then
             PROJECT="$PWD"
           else
             REQUIREMENTS=$(find . -type f \
@@ -37,13 +37,13 @@ jobs:
               -print -quit)
 
             if [ -n "$REQUIREMENTS" ]; then
-              PROJECT="$(dirname "$PWD/${REQUIREMENTS#./}")"
+              PROJECT="$(dirname "$(realpath "$REQUIREMENTS")")"
             else
               ZIP_FILE=$(find . -maxdepth 4 -type f \
                 -iname '*STAGE195*.zip' -print -quit)
 
               if [ -z "$ZIP_FILE" ]; then
-                echo "Stage195 kaynak dosyası bulunamadı."
+                echo "Stage195 kaynak ZIP dosyası bulunamadı."
                 exit 1
               fi
 
@@ -62,9 +62,13 @@ jobs:
             fi
           fi
 
-          if [ ! -f "$PROJECT/android-wrapper/settings.gradle.kts" ] && \
-             [ ! -f "$PROJECT/android-wrapper/settings.gradle" ]; then
-            echo "Android Gradle proje dosyaları bulunamadı."
+          if [ ! -d "$PROJECT/android-wrapper" ]; then
+            echo "android-wrapper klasörü bulunamadı."
+            exit 1
+          fi
+
+          if [ ! -f "$PROJECT/android-wrapper/settings.gradle.kts" ]; then
+            echo "Gradle settings dosyası bulunamadı."
             exit 1
           fi
 
@@ -78,15 +82,13 @@ jobs:
           echo "Stage195 proje dizini:"
           echo "$PROJECT"
 
-          echo "Kaynak klasörü doğrulandı."
-
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -98,8 +100,6 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
 
       - name: Install Android SDK packages
         shell: bash
@@ -107,41 +107,17 @@ jobs:
           set -euo pipefail
 
           sdkmanager --install \
+            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
-          sdkmanager --licenses
+          yes | sdkmanager --licenses || true
 
       - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
           cache-cleanup: on-success
-
-      - name: Check Maven repository connectivity
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          URLS=(
-            "https://repo.maven.apache.org/maven2/org/jetbrains/kotlin/kotlin-gradle-plugins-bom/2.0.21/kotlin-gradle-plugins-bom-2.0.21.pom"
-            "https://repo.maven.apache.org/maven2/io/netty/netty-codec/4.1.93.Final/netty-codec-4.1.93.Final.pom"
-            "https://dl.google.com/dl/android/maven2/com/android/tools/build/gradle/8.7.3/gradle-8.7.3.pom"
-          )
-
-          for URL in "${URLS[@]}"; do
-            echo "Checking: $URL"
-
-            curl --fail --silent --show-error \
-              --location \
-              --retry 4 \
-              --retry-all-errors \
-              --retry-delay 3 \
-              --output /dev/null \
-              "$URL"
-
-            echo "Repository endpoint accessible."
-          done
 
       - name: Install Python test dependencies
         working-directory: ${{ env.PROJECT_DIR }}
@@ -156,7 +132,7 @@ jobs:
 
           python -m playwright install --with-deps chromium
 
-      - name: Verify Stage195 source
+      - name: Verify Stage195 source and backend
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -182,7 +158,7 @@ jobs:
           )
 
           if [ "${#TESTS[@]}" -eq 0 ]; then
-            echo "JavaScript test dosyası bulunamadı."
+            echo "JavaScript testleri bulunamadı."
             exit 1
           fi
 
@@ -191,7 +167,7 @@ jobs:
             node "$test_file"
           done
 
-          echo "JavaScript regression tests completed."
+          echo "JavaScript testleri tamamlandı."
 
       - name: Run Python and browser regression tests
         working-directory: ${{ env.PROJECT_DIR }}
@@ -204,12 +180,17 @@ jobs:
           shopt -s nullglob
           TESTS=(scripts/test-*.py)
 
+          if [ "${#TESTS[@]}" -eq 0 ]; then
+            echo "Python testleri bulunamadı."
+            exit 1
+          fi
+
           for test_file in "${TESTS[@]}"; do
             echo "Running: $test_file"
             python "$test_file"
           done
 
-          echo "Python and browser tests completed."
+          echo "Python ve tarayıcı testleri tamamlandı."
 
       - name: Build Stage195 Android APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -217,12 +198,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Starting Stage195 Android build."
-
           BUILD_SUCCESS=false
 
           for ATTEMPT in 1 2 3; do
-            echo "Gradle build attempt: $ATTEMPT / 3"
+            echo "APK derleme denemesi: $ATTEMPT / 3"
 
             if gradle \
               -p android-wrapper \
@@ -236,19 +215,19 @@ jobs:
             fi
 
             if [ "$ATTEMPT" -lt 3 ]; then
-              echo "Build failed. Waiting before retry."
+              echo "Derleme başarısız. Tekrar denenecek."
               sleep 15
             fi
           done
 
           if [ "$BUILD_SUCCESS" != "true" ]; then
-            echo "Stage195 APK build failed after 3 attempts."
+            echo "Stage195 APK derlemesi başarısız."
             exit 1
           fi
 
-          echo "Gradle build completed successfully."
+          echo "APK derlemesi başarılı."
 
-      - name: Verify APK and calculate checksum
+      - name: Verify APK and calculate SHA256
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -257,7 +236,7 @@ jobs:
           APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
 
           if [ ! -s "$APK" ]; then
-            echo "APK bulunamadı veya dosya boş."
+            echo "APK bulunamadı veya boş."
             exit 1
           fi
 
@@ -270,10 +249,10 @@ jobs:
 
           sha256sum *.apk > SHA256SUMS.txt
 
-          echo "APK file information:"
+          echo "Oluşturulan APK:"
           ls -lh *.apk
 
-          echo "APK checksum:"
+          echo "SHA256:"
           cat SHA256SUMS.txt
 
       - name: Upload Stage195 Android APK
