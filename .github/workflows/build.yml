@@ -1,5 +1,5 @@
 
-name: SONGDNA SMART STUDIO 7.6.0 - Stage197 Android Build
+name: SONGDNA SMART STUDIO 7.6.1 - Stage197 Android Build
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ concurrency:
 
 jobs:
   verify-and-build:
-    name: Verify and Build 7.6.0 APK
+    name: Verify and Build 7.6.1 APK
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
@@ -40,7 +40,7 @@ jobs:
                 -iname '*STAGE197*.zip' -print -quit)
 
               if [ -z "$ZIP_FILE" ]; then
-                echo "Stage197 source ZIP not found."
+                echo "Stage197 source folder or ZIP not found."
                 exit 1
               fi
 
@@ -51,7 +51,7 @@ jobs:
                 -type f -name requirements-test.txt -print -quit)
 
               if [ -z "$REQUIREMENTS" ]; then
-                echo "requirements-test.txt not found."
+                echo "requirements-test.txt not found in ZIP."
                 exit 1
               fi
 
@@ -95,10 +95,11 @@ jobs:
             "build-tools;35.0.0"
           yes | sdkmanager --licenses || true
 
-      - name: Setup Gradle 8.9 and cache
+      - name: Setup Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+          cache-cleanup: on-success
 
       - name: Install Python test dependencies
         working-directory: ${{ env.PROJECT_DIR }}
@@ -118,6 +119,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           mapfile -d '' TESTS < <(
             find tests scripts -maxdepth 1 -type f -name '*.js' \
               ! -name 'test-stage70-deployment-config.js' \
@@ -136,6 +138,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           python scripts/ci-preflight.py
 
           shopt -s nullglob
@@ -147,7 +150,7 @@ jobs:
             python "$test_file"
           done
 
-      - name: Build 7.6.0 Android APK with retry
+      - name: Build 7.6.1 Android APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -168,13 +171,13 @@ jobs:
 
             if [ "$ATTEMPT" -lt 4 ]; then
               WAIT_TIME=$((ATTEMPT * 45))
-              echo "Build failed. Waiting ${WAIT_TIME} seconds before retry."
+              echo "Waiting ${WAIT_TIME} seconds before retry."
               sleep "$WAIT_TIME"
             fi
           done
 
           if [ "$BUILD_SUCCESS" != "true" ]; then
-            echo "7.6.0 APK build failed after 4 attempts."
+            echo "7.6.1 APK build failed after 4 attempts."
             exit 1
           fi
 
@@ -190,7 +193,7 @@ jobs:
           mkdir -p stage197-output
 
           cp "$APK" \
-            stage197-output/SONGDNA_SMART_STUDIO_7_6_0_STAGE197_DEBUG.apk
+            stage197-output/SONGDNA_SMART_STUDIO_7_6_1_STAGE197_DEBUG.apk
 
           cd stage197-output
           sha256sum *.apk > SHA256SUMS.txt
@@ -201,7 +204,7 @@ jobs:
       - name: Upload Stage197 Android APK
         uses: actions/upload-artifact@v4
         with:
-          name: SONGDNA-SMART-STUDIO-7.6.0-STAGE197-ANDROID
+          name: SONGDNA-SMART-STUDIO-7.6.1-STAGE197-ANDROID
           path: ${{ env.PROJECT_DIR }}/stage197-output/*
           if-no-files-found: error
           retention-days: 30
