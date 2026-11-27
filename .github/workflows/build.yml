@@ -38,18 +38,23 @@ jobs:
             else
               ZIP_FILE=$(find . -maxdepth 4 -type f \
                 -iname '*STAGE197*.zip' -print -quit)
+
               if [ -z "$ZIP_FILE" ]; then
-                echo "Stage197 source folder or ZIP not found."
+                echo "Stage197 source ZIP not found."
                 exit 1
               fi
+
               mkdir -p "$RUNNER_TEMP/stage197-source"
               unzip -q "$ZIP_FILE" -d "$RUNNER_TEMP/stage197-source"
+
               REQUIREMENTS=$(find "$RUNNER_TEMP/stage197-source" \
                 -type f -name requirements-test.txt -print -quit)
+
               if [ -z "$REQUIREMENTS" ]; then
-                echo "requirements-test.txt not found in ZIP."
+                echo "requirements-test.txt not found."
                 exit 1
               fi
+
               PROJECT="$(dirname "$REQUIREMENTS")"
             fi
           fi
@@ -57,6 +62,7 @@ jobs:
           test -d "$PROJECT/android-wrapper"
           test -f "$PROJECT/android-wrapper/settings.gradle.kts"
           test -f "$PROJECT/android-wrapper/app/build.gradle.kts"
+
           echo "PROJECT_DIR=$PROJECT" >> "$GITHUB_ENV"
           echo "Stage197 project: $PROJECT"
 
@@ -89,11 +95,10 @@ jobs:
             "build-tools;35.0.0"
           yes | sdkmanager --licenses || true
 
-      - name: Setup Gradle 8.9
+      - name: Setup Gradle 8.9 and cache
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-          cache-cleanup: on-success
 
       - name: Install Python test dependencies
         working-directory: ${{ env.PROJECT_DIR }}
@@ -118,7 +123,9 @@ jobs:
               ! -name 'test-stage70-deployment-config.js' \
               -print0 | sort -z
           )
+
           test "${#TESTS[@]}" -gt 0
+
           for test_file in "${TESTS[@]}"; do
             echo "Running: $test_file"
             node "$test_file"
@@ -130,31 +137,44 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/ci-preflight.py
+
           shopt -s nullglob
           TESTS=(scripts/test-*.py)
           test "${#TESTS[@]}" -gt 0
+
           for test_file in "${TESTS[@]}"; do
             echo "Running: $test_file"
             python "$test_file"
           done
 
-      - name: Build 7.6.0 Android APK
+      - name: Build 7.6.0 Android APK with retry
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
+
           BUILD_SUCCESS=false
-          for ATTEMPT in 1 2 3; do
-            echo "Gradle build attempt: $ATTEMPT / 3"
+
+          for ATTEMPT in 1 2 3 4; do
+            echo "Gradle build attempt: $ATTEMPT / 4"
+
             if gradle -p android-wrapper :app:assembleDebug \
-              --no-daemon --refresh-dependencies --stacktrace; then
+              --no-daemon \
+              --max-workers=2 \
+              --stacktrace; then
               BUILD_SUCCESS=true
               break
             fi
-            if [ "$ATTEMPT" -lt 3 ]; then sleep 15; fi
+
+            if [ "$ATTEMPT" -lt 4 ]; then
+              WAIT_TIME=$((ATTEMPT * 45))
+              echo "Build failed. Waiting ${WAIT_TIME} seconds before retry."
+              sleep "$WAIT_TIME"
+            fi
           done
+
           if [ "$BUILD_SUCCESS" != "true" ]; then
-            echo "7.6.0 APK build failed after 3 attempts."
+            echo "7.6.0 APK build failed after 4 attempts."
             exit 1
           fi
 
@@ -163,12 +183,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
           APK="android-wrapper/app/build/outputs/apk/debug/app-debug.apk"
           test -s "$APK"
+
           mkdir -p stage197-output
-          cp "$APK" stage197-output/SONGDNA_SMART_STUDIO_7_6_0_STAGE197_DEBUG.apk
+
+          cp "$APK" \
+            stage197-output/SONGDNA_SMART_STUDIO_7_6_0_STAGE197_DEBUG.apk
+
           cd stage197-output
           sha256sum *.apk > SHA256SUMS.txt
+
           ls -lh *.apk
           cat SHA256SUMS.txt
 
